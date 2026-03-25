@@ -74,4 +74,39 @@ router.post("/delete-lead", async (req, res) => {
     return res.json({ status: "success" });
 });
 
+
+
+// ============================================================
+// GESTION DES CHAMPS DYNAMIQUES (LE NO-CODE BUILDER)
+// ============================================================
+
+// 5. LIRE LA CONFIGURATION DES CHAMPS
+router.all("/crm-fields", async (req, res) => {
+    const { data, error } = await supabase
+        .from("crm_fields")
+        .select("*")
+        .order("created_at", { ascending: true });
+
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json(data);
+});
+
+// 6. CRÉER UN NOUVEAU CHAMP (Admin uniquement)
+router.post("/save-crm-field", async (req, res) => {
+    if (!checkPerm(req, "can_manage_config")) {
+        return res.status(403).json({ error: "Accès refusé. Seul un Admin peut modifier la structure." });
+    }
+
+    const { label, key_name, field_type } = req.body;
+
+    const { error } = await supabase.from("crm_fields").insert([{
+        label,
+        key_name: key_name.toLowerCase().replace(/\s+/g, '_'), // Nettoie la clé pour le JSON
+        field_type
+    }]);
+
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json({ status: "success" });
+});
+
 module.exports = router;
