@@ -17,31 +17,75 @@ router.all("/leads", async (req, res) => {
     return res.json(data);
 });
 
-// 2. CRÉER OU MODIFIER UN LEAD (Moteur dynamique)
+// 2. CRÉER OU MODIFIER UN LEAD (Version Finale SaaS Premium avec Audit Log)
 router.post("/save-lead", async (req, res) => {
     if (!checkPerm(req, "can_manage_crm")) return res.status(403).json({ error: "Accès refusé" });
 
-    const { id, nom_client, status, assigned_to, ...dynamicData } = req.body;
+    // On récupère agent_name envoyé par le front pour l'historique
+    const { id, nom_client, status, assigned_to, agent_name, ...dynamicData } = req.body;
 
-    const payload = {
-        nom_client,
-        status,
-        assigned_to,
-        data: dynamicData, // Tout le reste tombe dans le JSONB dynamiquement
-        updated_at: new Date()
-    };
+    try {
+        let result;
 
-    let result;
-    if (id) {
-        result = await supabase.from("crm_leads").update(payload).eq("id", id);
-    } else {
-        result = await supabase.from("crm_leads").insert([payload]);
+        if (id) {
+            // --- MODE MISE À JOUR (UPDATE) ---
+            const { data: currentLead, error: fetchErr } = await supabase
+                .from("crm_leads")
+                .select("*")
+                .eq("id", id)
+                .single();
+
+            if (fetchErr || !currentLead) return res.status(404).json({ error: "Lead introuvable" });
+
+            // 1. Préparation du payload de base
+            const payload = {
+                nom_client: nom_client || currentLead.nom_client,
+                status: status || currentLead.status,
+                assigned_to: assigned_to !== undefined ? assigned_to : currentLead.assigned_to,
+                data: { ...(currentLead.data || {}), ...dynamicData },
+                updated_at: new Date()
+            };
+
+            // 2. 💥 LOGIQUE D'AUDIT : Si le statut a changé, on l'écrit dans l'historique
+            if (status && status !== currentLead.status) {
+                let history = currentLead.history || [];
+                history.push({
+                    date: new Date().toISOString(),
+                    type: "NOTE",
+                    content: `🔄 Statut modifié : ${currentLead.status} ➜ ${status}`,
+                    author: agent_name || "Système"
+                });
+                payload.history = history;
+            }
+
+            result = await supabase.from("crm_leads").update(payload).eq("id", id);
+        } else {
+            // --- MODE CRÉATION (INSERT) ---
+            const payload = {
+                nom_client,
+                status: status || 'Nouveau',
+                assigned_to: assigned_to || null,
+                data: dynamicData,
+                history: [{
+                    date: new Date().toISOString(),
+                    type: "NOTE",
+                    content: "🆕 Création du prospect dans le CRM",
+                    author: agent_name || "Système"
+                }],
+                updated_at: new Date()
+            };
+
+            result = await supabase.from("crm_leads").insert([payload]);
+        }
+
+        if (result.error) throw result.error;
+        return res.json({ status: "success" });
+
+    } catch (err) {
+        console.error("❌ Erreur save-lead:", err.message);
+        return res.status(500).json({ error: err.message });
     }
-
-    if (result.error) return res.status(500).json({ error: result.error.message });
-    return res.json({ status: "success" });
 });
-
 // 3. AJOUTER UNE INTERACTION (Appel, Email, Notes...)
 router.post("/add-interaction", async (req, res) => {
     const { lead_id, type, content, agent_name } = req.body;
@@ -155,6 +199,84 @@ router.post("/send-email", async (req, res) => {
 
     await supabase.from("crm_leads").update({ history: history }).eq("id", lead_id);
     
+    return res.json({ status: "success" });
+});
+
+
+
+// UPLOAD DE FICHIER POUR UN LEAD CRM
+router.post("/upload-lead-file", async (req, res) => {
+    try {
+        const { lead_id, agent_name } = req.body;
+        const file = req.files[0]; // Multer récupère le fichier
+        
+        if (!file) return res.status(400).json({ error: "Aucun fichier reçu" });
+
+        // 1. Envoi vers Supabase Storage
+        const fileName = `crm/${lead_id}/${Date.now()}_${file.originalname.replace(/\s/g, '_')}`;
+        const { data: upData, error: upErr } = await supabase.storage
+            .from("documents")
+            .upload(fileName, file.buffer, { contentType: file.mimetype });
+
+        if (upErr) throw upErr;
+
+        const { data: publicUrl } = supabase.storage.from("documents").getPublicUrl(fileName);
+
+        // 2. Mise à jour de la colonne "data" du Lead pour inclure le fichier
+        const { data: lead } = await supabase.from("crm_leads").select("data, history").eq("id", lead_id).single();
+        
+        let currentData = lead.data || {};
+        if (!currentData.files) currentData.files = [];
+        
+        const fileObj = {
+            name: file.originalname,
+            url: publicUrl.publicUrl,
+            date: new Date().toISOString(),
+            size: (file.size / 1024).toFixed(1) + ' KB'
+        };
+        currentData.files.push(fileObj);
+
+        // 3. On ajoute aussi une trace dans l'historique
+        let history = lead.history || [];
+        history.push({
+            date: new Date().toISOString(),
+            type: "NOTE",
+            content: `📁 Fichier ajouté : ${file.originalname}`,
+            author: agent_name
+        });
+
+        await supabase.from("crm_leads").update({ data: currentData, history: history }).eq("id", lead_id);
+
+        return res.json({ status: "success", file: fileObj });
+    } catch (err) {
+        return res.status(500).json({ error: err.message });
+    }
+});
+
+
+// 7. LIRE LES ÉTAPES (COLONNES) DU KANBAN
+router.all("/stages", async (req, res) => {
+    const { data, error } = await supabase
+        .from("crm_stages")
+        .select("*")
+        .order("order_index", { ascending: true });
+
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json(data);
+});
+
+// 8. CRÉER/MODIFIER UNE ÉTAPE (Admin)
+router.post("/save-stage", async (req, res) => {
+    if (!checkPerm(req, "can_manage_config")) return res.status(403).json({ error: "Interdit" });
+    
+    const { id, label, color, order_index } = req.body;
+    const payload = { label, color, order_index };
+
+    let result;
+    if (id) result = await supabase.from("crm_stages").update(payload).eq("id", id);
+    else result = await supabase.from("crm_stages").insert([payload]);
+
+    if (result.error) return res.status(500).json({ error: result.error.message });
     return res.json({ status: "success" });
 });
 
