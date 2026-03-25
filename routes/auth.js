@@ -61,23 +61,34 @@ router.all("/login", async (req, res) => {
       return res.json({ status: "require_2fa", email: user.email });
     }
 
-    // --- POUR LES AUTRES (EMPLOYÉ SIMPLE) : GÉNÉRATION JWT DIRECTE ---
-    const token = jwt.sign({ 
-        id: user.id, 
-        emp_id: emp ? emp.id : null, 
-        role: userRole, 
-        permissions: {} 
-    }, JWT_SECRET, { expiresIn: "8h" });
-
-    return res.json({
-      status: "success",
-      token: token,
-      id: emp ? emp.id : null,
-      nom: user.nom_complet,
-      role: userRole,
-      employee_type: emp ? emp.employee_type : "OFFICE"
-    });
-  } catch (err) {
+  // --- POUR LES AUTRES (EMPLOYÉ SIMPLE) : GÉNÉRATION JWT DIRECTE ---
+      
+      // ✅ 1. On récupère les permissions exactes de son rôle dans la base
+      const { data: perms } = await supabase
+          .from("role_permissions")
+          .select("*")
+          .eq("role_name", userRole)
+          .single();
+  
+      // ✅ 2. On les injecte dans le Token
+      const token = jwt.sign({ 
+          id: user.id, 
+          emp_id: emp ? emp.id : null, 
+          role: userRole, 
+          permissions: perms || {} 
+      }, process.env.JWT_SECRET, { expiresIn: "8h" });
+  
+      return res.json({
+        status: "success",
+        token: token,
+        id: emp ? emp.id : null,
+        nom: user.nom_complet,
+        role: userRole,
+        employee_type: emp ? emp.employee_type : "OFFICE",
+        permissions: perms || {}
+      });
+      
+    } catch (err) {
     console.error("Login Crash:", err);
     return res.status(500).json({ error: "Erreur serveur interne" });
   }
