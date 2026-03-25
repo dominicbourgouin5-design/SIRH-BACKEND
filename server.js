@@ -44,8 +44,8 @@ const upload = multer({
 const allowedOrigins = [
     'https://sirh.cataria-systems.com',
     'http://sirh.cataria-systems.com', 
-    'https://dom4002.github.io',
-    'http://dom4002.github.io'
+    'https://dominicbourgouin5-design.github.io',
+    'http://dominicbourgouin5-design.github.io'
 ];
 
 // --- CONFIGURATION CORS  ---
