@@ -653,32 +653,30 @@ router.all("/add-mobile-location", async (req, res) => {
   return res.json({ status: "success", data: data[0] });
 });
 
-// B. Lister les lieux (CORRECTION : RETRAIT DU FILTRE QUI PLANTAIT)
+// B. Lister les lieux (OUVERT À TOUS POUR LE CACHE GPS HORS-LIGNE)
 router.all("/list-mobile-locations", async (req, res) => {
-  const p = req.user.permissions || {};
+  
+  // 1. Plus de restriction de permission ici ! 
+  // Tous les utilisateurs connectés doivent pouvoir télécharger cette liste 
+  // pour que l'algorithme GPS hors-ligne de leur téléphone fonctionne.
 
-  // 1. Droit d'entrée de base
-  const canView =
-    p.can_manage_config ||
-    p.can_see_employees ||
-    p.can_manage_schedules ||
-    p.can_manage_mobile_locations;
+  try {
+      let query = supabase
+        .from("mobile_locations")
+        .select("*")
+        .eq("is_active", true)
+        .order("name", { ascending: true });
 
-  // Si l'utilisateur n'a aucun de ces droits, on bloque
-  if (!canView) return res.status(403).json({ error: "Accès refusé." });
-
-  // 2. Préparation de la requête
-  // ON A RETIRÉ LE FILTRE 'created_by_id' QUI CAUSAIT L'ERREUR 500
-  let query = supabase
-    .from("mobile_locations")
-    .select("*")
-    .eq("is_active", true)
-    .order("name", { ascending: true });
-
-  const { data, error } = await query;
-  if (error) throw error;
-  return res.json(data);
+      const { data, error } = await query;
+      if (error) throw error;
+      
+      return res.json(data);
+  } catch (err) {
+      console.error("Erreur list-mobile-locations:", err);
+      return res.status(500).json({ error: "Erreur serveur lors de la lecture des lieux." });
+  }
 });
+
 
 router.all("/list-zones", async (req, res) => {
   if (!req.user.permissions || !req.user.permissions.can_manage_config) {
@@ -693,6 +691,9 @@ router.all("/list-zones", async (req, res) => {
   if (error) throw error;
   return res.json(data);
 });
+
+
+
 
 // C. Mettre à jour un lieu mobile
 router.all("/update-mobile-location", async (req, res) => {
