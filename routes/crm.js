@@ -109,4 +109,47 @@ router.post("/save-crm-field", async (req, res) => {
     return res.json({ status: "success" });
 });
 
+
+
+// 5. ENVOYER UN EMAIL DIRECTEMENT DEPUIS LE CRM
+router.post("/send-email", async (req, res) => {
+    if (!checkPerm(req, "can_manage_crm")) return res.status(403).json({ error: "Accès refusé" });
+
+    const { lead_id, to_email, subject, content, agent_name } = req.body;
+
+    if (!to_email || !subject || !content) {
+        return res.status(400).json({ error: "Veuillez remplir l'email, le sujet et le message." });
+    }
+
+    // 1. Envoi du mail via Brevo (Sendinblue)
+    const htmlContent = `
+        <div style="font-family: sans-serif; color: #1e293b; line-height: 1.6;">
+            ${content.replace(/\n/g, '<br>')}
+            <br><br><hr style="border:0; border-top:1px solid #e2e8f0;">
+            <p style="font-size:11px; color:#64748b;">Envoyé par <b>${agent_name}</b> via SIRH SECURE</p>
+        </div>
+    `;
+    
+    // On utilise ta fonction utilitaire (déjà existante pour la 2FA)
+    const { sendEmailAPI } = require("../utils");
+    const mailSent = await sendEmailAPI(to_email, subject, htmlContent);
+
+    if (!mailSent) return res.status(500).json({ error: "Erreur lors de la communication avec le serveur d'envoi." });
+
+    // 2. Si le mail est parti, on l'ajoute à l'historique du client (Traçabilité absolue)
+    const { data: lead } = await supabase.from("crm_leads").select("history").eq("id", lead_id).single();
+    
+    let history = lead.history ||[];
+    history.push({
+        date: new Date().toISOString(),
+        type: "EMAIL",
+        content: `📧 Sujet : ${subject}\n${content}`,
+        author: agent_name
+    });
+
+    await supabase.from("crm_leads").update({ history: history }).eq("id", lead_id);
+    
+    return res.json({ status: "success" });
+});
+
 module.exports = router;
