@@ -215,6 +215,41 @@ router.all("/clock", async (req, res) => {
                     } else {
                         console.log("✨ [SUCCÈS] Rapport de visite mis à jour avec les produits.");
                     }
+                // 💥 NOUVEAU : MISE À JOUR DU CRM SI LIÉ 💥
+                    if (req.body.crm_lead_id && req.body.crm_lead_id !== 'null') {
+                        console.log(`🔗 Liaison de la visite au prospect CRM ID: ${req.body.crm_lead_id}`);
+                        try {
+                            // 1. On récupère l'historique actuel du client
+                            const { data: lead } = await supabase
+                                .from("crm_leads")
+                                .select("history")
+                                .eq("id", req.body.crm_lead_id)
+                                .single();
+
+                            if (lead) {
+                                let history = lead.history ||[];
+                                
+                                // 2. On ajoute la trace de la visite à l'historique du client
+                                history.push({
+                                    date: eventTime.toISOString(),
+                                    type: "NOTE", 
+                                    content: `📍 Visite Terrain effectuée.\nRésultat : ${outcome || 'VU'}\nObservation : ${report || 'Aucune'}`,
+                                    author: emp.nom
+                                });
+
+                                // 3. On sauvegarde dans Supabase
+                                await supabase
+                                    .from("crm_leads")
+                                    .update({ history: history })
+                                    .eq("id", req.body.crm_lead_id);
+                                    
+                                console.log("✅ Historique CRM mis à jour avec le rapport de visite.");
+                            }
+                        } catch (crmErr) {
+                            console.error("❌ Erreur Liaison CRM:", crmErr.message);
+                        }
+                    }
+
                 } else {
                     console.warn("⚠️ [ATTENTION] Aucune visite ouverte trouvée pour cet agent.");
                 }
@@ -224,7 +259,7 @@ router.all("/clock", async (req, res) => {
                     await supabase.from('employees').update({ statut: 'Actif' }).eq('id', emp.id);
                 }   
             } 
-        } // <--- ACCOLADE AJOUTÉE ICI : Ferme proprement le "if (isMobileAgent)"
+        } 
         else {
             // Sédentaires : Update statut simple
             await supabase.from('employees').update({ statut: clockAction === 'CLOCK_IN' ? 'En Poste' : 'Actif' }).eq('id', emp.id);
