@@ -5,6 +5,7 @@ const multer = require("multer");
 const jwt = require("jsonwebtoken");
 
 // --- IMPORTS DES MODULES ---
+const crmRoutes = require("./routes/crm");
 const authRoutes = require("./routes/auth");
 const employeeRoutes = require("./routes/employees");
 const payrollRoutes = require("./routes/payroll");
@@ -123,6 +124,7 @@ app.use("/api", mobileRoutes);
 app.use("/api", catalogRoutes);
 app.use("/api", chatRoutes);
 app.use("/api", systemRoutes);
+app.use("/api", crmRoutes); 
 
 // --- GESTIONNAIRE D'ERREURS GLOBAL (Anti-Crash) ---
 app.use((err, req, res, next) => {
