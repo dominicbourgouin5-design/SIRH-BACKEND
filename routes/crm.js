@@ -94,21 +94,27 @@ router.all("/crm-fields", async (req, res) => {
 // 6. CRÉER UN NOUVEAU CHAMP (Admin uniquement)
 router.post("/save-crm-field", async (req, res) => {
     if (!checkPerm(req, "can_manage_config")) {
-        return res.status(403).json({ error: "Accès refusé. Seul un Admin peut modifier la structure." });
+        return res.status(403).json({ error: "Accès refusé." });
     }
 
-    const { label, key_name, field_type } = req.body;
+    const { label, key_name, field_type, options } = req.body;
+
+    // Si c'est un sélecteur, on s'assure que les options sont bien un tableau propre
+    let finalOptions = null;
+    if (field_type === 'select' && options) {
+        finalOptions = Array.isArray(options) ? options : options.split(',').map(o => o.trim());
+    }
 
     const { error } = await supabase.from("crm_fields").insert([{
         label,
-        key_name: key_name.toLowerCase().replace(/\s+/g, '_'), // Nettoie la clé pour le JSON
-        field_type
+        key_name: key_name.toLowerCase().replace(/\s+/g, '_'),
+        field_type,
+        options: finalOptions // 💥 Sauvegarde du tableau JSON
     }]);
 
     if (error) return res.status(500).json({ error: error.message });
     return res.json({ status: "success" });
 });
-
 
 
 // 5. ENVOYER UN EMAIL DIRECTEMENT DEPUIS LE CRM
