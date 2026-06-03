@@ -24,7 +24,9 @@
     "docxtemplater-image-module-free": "^1.1.1",
     "p-limit": "^3.1.0",
     "image-size": "^1.0.2",
-    "jimp": "^0.22.10" 
+    "jimp": "^0.22.10",
+     "ws": "^8.14.0"
+
   }
 }
 
