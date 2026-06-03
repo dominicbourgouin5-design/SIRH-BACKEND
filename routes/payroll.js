@@ -17,6 +17,11 @@ router.all("/read-payroll-full", async (req, res) => {
     return res.status(403).json({ error: "Accès refusé" });
   }
 
+  // 🔥 AJOUT 1 : Récupérer les paramètres de pagination
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 50;
+  const offset = (page - 1) * limit;
+
   try {
     const currentUserId = req.user.emp_id;
     const { data: requester } = await supabase
@@ -27,9 +32,9 @@ router.all("/read-payroll-full", async (req, res) => {
 
     let columns =
       "id, nom, matricule, poste, departement, statut, salaire_brut_fixe, indemnite_transport, indemnite_logement, role, hierarchy_path, employee_type";
-    let query = supabase.from("employees").select(columns);
+    let query = supabase.from("employees").select(columns, { count: "exact" }); // 🔥 AJOUT 2 : { count: "exact" }
 
-    // 1. SÉCURITÉ : Même logique de périmètre que la route 'read'
+    // 1. SÉCURITÉ : Même logique de périmètre
     if (checkPerm(req, "can_see_employees")) {
       // Admin voit tout
     } else if (req.user.role === "MANAGER" && requester) {
@@ -45,11 +50,10 @@ router.all("/read-payroll-full", async (req, res) => {
       query = query.eq("id", currentUserId);
     }
 
-    // 2. FILTRE DE STATUT INTELLIGENT (C'est ici que ça se règle)
+    // 2. FILTRES (inchangés)
     const { status, type, dept, role } = req.query;
 
     if (status && status !== "all") {
-      // On utilise la même règle : "Actif" inclut aussi "En Poste"
       if (status === "Actif") {
         query = query.in("statut", ["Actif", "En Poste", "ACTIF", "En poste"]);
       } else {
@@ -61,10 +65,22 @@ router.all("/read-payroll-full", async (req, res) => {
     if (dept && dept !== "all") query = query.eq("departement", dept);
     if (role && role !== "all") query = query.eq("role", role);
 
-    const { data, error } = await query.order("nom", { ascending: true });
+    // 🔥 AJOUT 3 : Pagination avec range() ET on récupère le count
+    const { data, error, count } = await query
+      .order("nom", { ascending: true })
+      .range(offset, offset + limit - 1);
 
     if (error) throw error;
-    return res.json(data);
+    
+    // 🔥 AJOUT 4 : Renvoyer les métadonnées de pagination
+    return res.json({
+      data: data,
+      meta: {
+        total: count,
+        page: page,
+        last_page: Math.ceil(count / limit)
+      }
+    });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
