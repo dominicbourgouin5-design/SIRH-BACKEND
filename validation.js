@@ -29,11 +29,16 @@ function sanitizeString(str) {
         .trim();
 }
 
-// Valide un numéro de téléphone Bénin
+// Valide un numéro de téléphone Bénin (avec ou sans espaces)
 function isValidPhone(phone) {
     if (!phone) return true; // Optionnel
+    
+    // Supprimer tous les espaces
     const cleaned = String(phone).replace(/\s/g, '');
-    const phoneRegex = /^(\+229|00229|0)?[0-9]{8}$/;
+    
+    // Accepter les formats: +229XXXXXXXX, 00229XXXXXXXX, 0XXXXXXXX
+    const phoneRegex = /^(\+229|00229|0)[0-9]{8}$/;
+    
     return phoneRegex.test(cleaned);
 }
 
