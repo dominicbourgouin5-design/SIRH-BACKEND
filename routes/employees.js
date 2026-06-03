@@ -299,12 +299,21 @@ router.all("/read", async (req, res) => {
 router.all("/emp-update", async (req, res) => {
   const { id, email, phone, address, dob, doc_type } = req.body;
 
-  const requesterId = String(req.user.emp_id);
+  // 🔥 CORRECTION : Récupérer l'agent plus proprement
+  const agentName = req.user?.nom || req.body.agent || "Employé";
+  const agentRole = req.user?.role || req.body.agent_role || "EMPLOYEE";
+
+  // 1. IDENTIFICATION SÉCURISÉE
+  const requesterId = String(req.user?.emp_id || req.body.emp_id);
   const targetId = String(id);
   const isOwner = requesterId === targetId;
-  const isRH = req.user.permissions && req.user.permissions.can_see_employees;
+  const isRH = req.user?.permissions?.can_see_employees === true;
 
+  console.log(`📝 Update ID ${targetId} (Type: ${doc_type}) par ${agentName} (Rôle: ${agentRole})`);
+
+  // Vérifier que l'utilisateur a le droit
   if (!isOwner && !isRH) {
+    console.error(`🚫 Accès refusé: ${agentName} tente de modifier ${targetId}`);
     return res.status(403).json({ error: "Interdit : Vous ne pouvez modifier que votre profil." });
   }
 
@@ -358,16 +367,18 @@ router.all("/emp-update", async (req, res) => {
       else if (doc_type === "contrat") updates.contrat_pdf_url = data.publicUrl;
       else if (doc_type === "diploma") updates.diploma_url = data.publicUrl;
       else if (doc_type === "attestation") updates.attestation_url = data.publicUrl;
-
+      
       if (doc_type !== "text_update") {
-        const agentName = req.body.agent || "Système RH";
-        await supabase.from("employee_archives").insert([{
-          employee_id: targetId,
-          doc_type: doc_type,
-          file_url: data.publicUrl,
-          agent: agentName
-        }]);
-        console.log(`🗄️ Document archivé : ${doc_type} pour ID ${targetId}`);
+          // 🔥 Utiliser agentName au lieu de req.body.agent
+          const agentNameForArchive = agentName;
+          
+          await supabase.from("employee_archives").insert([{
+              employee_id: targetId,
+              doc_type: doc_type,
+              file_url: data.publicUrl,
+              agent: agentNameForArchive
+          }]);
+          console.log(`🗄️ Document archivé : ${doc_type} pour ID ${targetId} par ${agentNameForArchive}`);
       }
     }
   }
