@@ -17,7 +17,6 @@ router.all("/read-payroll-full", async (req, res) => {
     return res.status(403).json({ error: "Accès refusé" });
   }
 
-  // 🔥 AJOUT 1 : Récupérer les paramètres de pagination
   const page = parseInt(req.query.page) || 1;
   const limit = parseInt(req.query.limit) || 50;
   const offset = (page - 1) * limit;
@@ -32,9 +31,9 @@ router.all("/read-payroll-full", async (req, res) => {
 
     let columns =
       "id, nom, matricule, poste, departement, statut, salaire_brut_fixe, indemnite_transport, indemnite_logement, role, hierarchy_path, employee_type";
-    let query = supabase.from("employees").select(columns, { count: "exact" }); // 🔥 AJOUT 2 : { count: "exact" }
+    let query = supabase.from("employees").select(columns, { count: "exact" });
 
-    // 1. SÉCURITÉ : Même logique de périmètre
+    // Filtres de sécurité...
     if (checkPerm(req, "can_see_employees")) {
       // Admin voit tout
     } else if (req.user.role === "MANAGER" && requester) {
@@ -50,29 +49,27 @@ router.all("/read-payroll-full", async (req, res) => {
       query = query.eq("id", currentUserId);
     }
 
-    // 2. FILTRES (inchangés)
+    // Filtres supplémentaires
     const { status, type, dept, role } = req.query;
-
     if (status && status !== "all") {
       if (status === "Actif") {
-        query = query.in("statut", ["Actif", "En Poste", "ACTIF", "En poste"]);
+        query = query.in("statut", ["Actif", "En Poste"]);
       } else {
         query = query.eq("statut", status);
       }
     }
-
     if (type && type !== "all") query = query.eq("employee_type", type);
     if (dept && dept !== "all") query = query.eq("departement", dept);
     if (role && role !== "all") query = query.eq("role", role);
 
-    // 🔥 AJOUT 3 : Pagination avec range() ET on récupère le count
+    // 🔥 PAGINATION
     const { data, error, count } = await query
       .order("nom", { ascending: true })
       .range(offset, offset + limit - 1);
 
     if (error) throw error;
     
-    // 🔥 AJOUT 4 : Renvoyer les métadonnées de pagination
+    // 🔥 RENVOI AVEC META
     return res.json({
       data: data,
       meta: {
