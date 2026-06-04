@@ -113,3 +113,4 @@ router.get('/dashboard-stats', async (req, res) => {
     res.json(stats);
 });
 
+module.exports = router;
