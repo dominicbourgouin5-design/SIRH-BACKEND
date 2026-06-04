@@ -7,16 +7,16 @@ const { runMonitoring } = require('./monitoring');
 const { runFullBackup } = require('./backup');
 const notificationService = require('./notificationService');
 
-
 const startCronJobs = () => {
-    // Le CRON tourne TOUTES LES HEURES (minute 0)
+    // ============================================================
+    // 1. VÉRIFICATION DES SHIFTS (toutes les heures)
+    // ============================================================
     cron.schedule('0 * * * *', async () => {
         console.log("⏰ [CRON] Vérification Intelligente des Shifts en cours...");
         const nowMs = Date.now();
         const today = new Date().toISOString().split('T')[0];
 
         try {
-            // 1. On récupère tous les employés "En Poste"
             const { data: enPoste } = await supabase
                 .from('employees')
                 .select('id, nom, employee_type')
@@ -29,28 +29,25 @@ const startCronJobs = () => {
 
             console.log(`📡 [CRON] ${enPoste.length} employé(s) en poste détecté(s)`);
 
-            // 2. On récupère UNIQUEMENT le pointage d'ENTRÉE d'aujourd'hui
             const ids = enPoste.map(e => e.id);
             const { data: lastPointages } = await supabase
                 .from('pointages')
                 .select('employee_id, heure')
                 .in('employee_id', ids)
                 .eq('action', 'CLOCK_IN')
-                .gte('heure', `${today}T00:00:00`)  // 🔥 CRUCIAL : seulement aujourd'hui
+                .gte('heure', `${today}T00:00:00`)
                 .order('heure', { ascending: false });
 
             const tasks = enPoste.map(emp => limit(async () => {
-                // 🔥 Trouver le pointage d'entrée d'aujourd'hui
                 const sonPointage = lastPointages?.find(p => p.employee_id === emp.id);
                 
                 if (!sonPointage) {
-                    console.log(`⚠️ ${emp.nom} est "En Poste" mais sans pointage d'entrée aujourd'hui. Correction automatique...`);
-                    // Auto-correction : repasser le statut à "Actif"
+                    console.log(`⚠️ ${emp.nom} est "En Poste" sans pointage. Correction...`);
                     await supabase.from('employees').update({ statut: 'Actif' }).eq('id', emp.id);
                     await supabase.from('logs').insert([{
                         agent: "Robot SIRH",
                         action: "CORRECTION STATUT",
-                        details: `${emp.nom} était bloqué en "En Poste" sans pointage valide. Statut remis à "Actif".`
+                        details: `${emp.nom} était bloqué en "En Poste" sans pointage valide.`
                     }]);
                     return;
                 }
@@ -58,19 +55,12 @@ const startCronJobs = () => {
                 const inTime = new Date(sonPointage.heure).getTime();
                 const shiftDurationHours = (nowMs - inTime) / (1000 * 60 * 60);
 
-                // 🔥 Vérification de cohérence : si plus de 24h, c'est une erreur
                 if (shiftDurationHours > 24) {
-                    console.log(`⚠️ ${emp.nom} a un shift de ${shiftDurationHours.toFixed(1)}h (>24h) - Correction forcée`);
+                    console.log(`⚠️ ${emp.nom} shift impossible (${shiftDurationHours.toFixed(1)}h) - Correction`);
                     await supabase.from('employees').update({ statut: 'Actif' }).eq('id', emp.id);
-                    await supabase.from('logs').insert([{
-                        agent: "Robot SIRH",
-                        action: "CORRECTION STATUT",
-                        details: `${emp.nom} avait un shift impossible de ${shiftDurationHours.toFixed(1)}h. Statut remis à "Actif".`
-                    }]);
                     return;
                 }
 
-                // Vérifier si la journée est déjà clôturée (sécurité)
                 const { data: existingOut } = await supabase
                     .from('pointages')
                     .select('id')
@@ -80,26 +70,23 @@ const startCronJobs = () => {
                     .maybeSingle();
 
                 if (existingOut) {
-                    console.log(`✅ ${emp.nom} - Journée déjà clôturée, ignoré.`);
+                    console.log(`✅ ${emp.nom} - Journée déjà clôturée.`);
                     return;
                 }
 
-                // --- ⚙️ CONFIGURATION DES RÈGLES PAR MÉTIER ---
-                let maxDuration = 14;       // Limite max avant clôture auto
-                let logicCloseAddHours = 9; // On ramène sa journée à 9h de travail sur sa paie
-                let warnDuration = 12;      // Heure du Smart Ping (Alerte)
+                let maxDuration = 14;
+                let logicCloseAddHours = 9;
+                let warnDuration = 12;
 
                 if (emp.employee_type === 'FIXED' || emp.employee_type === 'SECURITY') {
-                    maxDuration = 17;       // Les gardes peuvent faire 16h sans problème
-                    logicCloseAddHours = 12;// Si on le ferme auto, on lui paie 12h max
+                    maxDuration = 17;
+                    logicCloseAddHours = 12;
                     warnDuration = 15;
                 }
 
                 console.log(`📊 ${emp.nom} - Shift: ${shiftDurationHours.toFixed(1)}h / Max: ${maxDuration}h`);
 
-                // --- 🔔 SOLUTION : SMART PING (Alerte avant punition) ---
                 if (shiftDurationHours >= warnDuration && shiftDurationHours < maxDuration) {
-                    // On vérifie si on n'a pas déjà envoyé d'alerte récemment
                     const { data: recentAlert } = await supabase
                         .from('flash_messages')
                         .select('id')
@@ -117,18 +104,11 @@ const startCronJobs = () => {
                         }]);
                         console.log(`🔔 Smart Ping envoyé à ${emp.nom}`);
                     }
-                }
-
-                // --- 🤖 AUTO-CLÔTURE INTELLIGENTE ---
-                else if (shiftDurationHours >= maxDuration) {
+                } else if (shiftDurationHours >= maxDuration) {
+                    console.log(`🚨 ${emp.nom} - Dépassement (${shiftDurationHours.toFixed(1)}h/${maxDuration}h). Auto-clôture...`);
                     
-                    console.log(`🚨 ${emp.nom} - Dépassement du temps maximum (${shiftDurationHours.toFixed(1)}h/${maxDuration}h). Auto-clôture...`);
-                    
-                    // L'IA du système : On ne clôture pas à l'heure du CRON (sinon on paie 14h),
-                    // on rétro-clôture à Heure d'Entrée + X heures logiques !
                     const logicalEndTime = new Date(inTime + (logicCloseAddHours * 60 * 60 * 1000));
 
-                    // A. Enregistrement de la sortie rétroactive
                     await supabase.from('pointages').insert([{
                         employee_id: emp.id,
                         action: 'CLOCK_OUT',
@@ -138,17 +118,15 @@ const startCronJobs = () => {
                         statut: "Oubli - Ajusté Auto"
                     }]);
 
-                    // B. Libération de l'agent
                     await supabase.from('employees').update({ statut: 'Actif' }).eq('id', emp.id);
                     
-                    // C. Log de sécurité pour le RH
                     await supabase.from('logs').insert([{
                         agent: "Robot SIRH",
                         action: "PROTECTION PAIE",
-                        details: `Clôture auto de ${emp.nom} après ${shiftDurationHours.toFixed(1)}h d'oubli. Shift ramené à ${logicCloseAddHours}h.`
+                        details: `Clôture auto de ${emp.nom} après ${shiftDurationHours.toFixed(1)}h. Shift ramené à ${logicCloseAddHours}h.`
                     }]);
 
-                    console.log(`✅ Auto-clôture intelligente appliquée pour : ${emp.nom}`);
+                    console.log(`✅ Auto-clôture appliquée pour : ${emp.nom}`);
                 }
             }));
 
@@ -159,105 +137,118 @@ const startCronJobs = () => {
             console.error("❌ Erreur critique Cron :", err); 
         }
     });
-};
 
-// Tâche quotidienne à 08:00 pour les contrats
-cron.schedule('0 8 * * *', async () => {
-    console.log("🤖 [ROBOT CONTRATS] Scan des échéances en cours...");
+    // ============================================================
+    // 2. ROBOT CONTRATS (tous les jours à 8h)
+    // ============================================================
+    cron.schedule('0 8 * * *', async () => {
+        console.log("🤖 [ROBOT CONTRATS] Scan des échéances en cours...");
 
-    try {
-        const today = new Date();
-        const in30Days = new Date(new Date().setDate(today.getDate() + 30)).toISOString().split('T')[0];
-        const in7Days = new Date(new Date().setDate(today.getDate() + 7)).toISOString().split('T')[0];
+        try {
+            const today = new Date();
+            const in30Days = new Date(new Date().setDate(today.getDate() + 30)).toISOString().split('T')[0];
+            const in7Days = new Date(new Date().setDate(today.getDate() + 7)).toISOString().split('T')[0];
 
-        const { data: emps, error } = await supabase
-            .from('employees')
-            .select('id, nom, email, poste, date_fin_contrat, manager_id, user_associated_id')
-            .in('date_fin_contrat', [in30Days, in7Days])
-            .not('statut', 'ilike', '%Sortie%');
+            const { data: emps, error } = await supabase
+                .from('employees')
+                .select('id, nom, email, poste, date_fin_contrat, manager_id, user_associated_id')
+                .in('date_fin_contrat', [in30Days, in7Days])
+                .not('statut', 'ilike', '%Sortie%');
 
-        if (error) throw error;
+            if (error) throw error;
 
-        if (!emps || emps.length === 0) {
-            console.log("📡 [ROBOT CONTRATS] Aucune échéance à signaler.");
-            return;
-        }
+            if (!emps || emps.length === 0) {
+                console.log("📡 [ROBOT CONTRATS] Aucune échéance à signaler.");
+                return;
+            }
 
-        console.log(`📡 [ROBOT CONTRATS] ${emps.length} contrat(s) arrivant à échéance.`);
+            console.log(`📡 [ROBOT CONTRATS] ${emps.length} contrat(s) arrivant à échéance.`);
 
-        for (const emp of emps) {
-            const daysLeft = (emp.date_fin_contrat === in30Days) ? 30 : 7;
+            for (const emp of emps) {
+                const daysLeft = (emp.date_fin_contrat === in30Days) ? 30 : 7;
 
-            const emailHtml = `
-            <div style="font-family: sans-serif; color: #1e293b; max-width: 500px; margin: auto; border: 1px solid #e2e8f0; border-radius: 16px; overflow: hidden;">
-                <div style="background-color: #0f172a; padding: 25px; text-align: center;">
-                    <img src="https://cdn-icons-png.flaticon.com/512/9752/9752284.png" style="width: 50px;">
-                </div>
-                <div style="padding: 30px;">
-                    <h2 style="color: #0f172a;">Suivi de votre contrat</h2>
-                    <p>Bonjour <b>${emp.nom}</b>,</p>
-                    <p>Ce message automatique vous informe que votre contrat actuel arrive à échéance le <b>${new Date(emp.date_fin_contrat).toLocaleDateString('fr-FR')}</b> (dans ${daysLeft} jours).</p>
-                    <p style="color: #64748b; font-size: 14px;">Le département RH et votre responsable ont été informés pour préparer la suite de votre collaboration.</p>
-                </div>
-            </div>`;
-            
-            await sendEmailAPI(emp.email, "Information relative à votre contrat", emailHtml);
+                const emailHtml = `
+                <div style="font-family: sans-serif; color: #1e293b; max-width: 500px; margin: auto; border: 1px solid #e2e8f0; border-radius: 16px; overflow: hidden;">
+                    <div style="background-color: #0f172a; padding: 25px; text-align: center;">
+                        <img src="https://cdn-icons-png.flaticon.com/512/9752/9752284.png" style="width: 50px;">
+                    </div>
+                    <div style="padding: 30px;">
+                        <h2 style="color: #0f172a;">Suivi de votre contrat</h2>
+                        <p>Bonjour <b>${emp.nom}</b>,</p>
+                        <p>Votre contrat arrive à échéance le <b>${new Date(emp.date_fin_contrat).toLocaleDateString('fr-FR')}</b> (dans ${daysLeft} jours).</p>
+                        <p style="color: #64748b; font-size: 14px;">Le RH et votre responsable ont été informés.</p>
+                    </div>
+                </div>`;
+                
+                await sendEmailAPI(emp.email, "Information relative à votre contrat", emailHtml);
 
-            if (emp.manager_id) {
-                const { data: manager } = await supabase
-                    .from('employees')
-                    .select('user_associated_id')
-                    .eq('id', emp.manager_id)
-                    .single();
+                if (emp.manager_id) {
+                    const { data: manager } = await supabase
+                        .from('employees')
+                        .select('user_associated_id')
+                        .eq('id', emp.manager_id)
+                        .single();
 
-                if (manager && manager.user_associated_id) {
-                    const pushTitle = daysLeft === 30 ? "📋 Échéance Contrat" : "⚠️ URGENCE CONTRAT";
-                    const pushBody = `${emp.nom} (${emp.poste}) arrive en fin de contrat dans ${daysLeft} jours. Veuillez statuer sur le renouvellement.`;
-                    
-                    await sendPushNotification(manager.user_associated_id, pushTitle, pushBody, "/#employees");
+                    if (manager && manager.user_associated_id) {
+                        const pushTitle = daysLeft === 30 ? "📋 Échéance Contrat" : "⚠️ URGENCE CONTRAT";
+                        const pushBody = `${emp.nom} (${emp.poste}) arrive en fin de contrat dans ${daysLeft} jours.`;
+                        await sendPushNotification(manager.user_associated_id, pushTitle, pushBody, "/#employees");
+                    }
                 }
             }
+            console.log(`✅ [ROBOT CONTRATS] ${emps.length} alertes envoyées.`);
+        } catch (err) {
+            console.error("❌ [ROBOT CONTRATS] Erreur :", err.message);
         }
-        console.log(`✅ [ROBOT CONTRATS] Scan terminé. ${emps.length} alertes envoyées.`);
-    } catch (err) {
-        console.error("❌ [ROBOT CONTRATS] Erreur :", err.message);
-    }
-});
+    });
 
+    // ============================================================
+    // 3. MONITORING (toutes les 5 minutes)
+    // ============================================================
+    cron.schedule('*/5 * * * *', async () => {
+        console.log("📊 [MONITORING] Vérification périodique...");
+        await runMonitoring();
+    });
 
-// Tâche de monitoring toutes les 5 minutes
-cron.schedule('*/5 * * * *', async () => {
-    console.log("📊 [MONITORING] Vérification périodique...");
-    await runMonitoring();
-});
+    // ============================================================
+    // 4. BACKUP QUOTIDIEN (à 2h)
+    // ============================================================
+    cron.schedule('0 2 * * *', async () => {
+        console.log("💾 [BACKUP] Backup automatique quotidien...");
+        await runFullBackup();
+    });
 
-// Tâche de backup quotidien à 2h00 du matin
-cron.schedule('0 2 * * *', async () => {
-    console.log("💾 [BACKUP] Backup automatique quotidien...");
-    await runFullBackup();
-});
+    // ============================================================
+    // 5. BACKUP HEBDOMADAIRE (lundi à 3h)
+    // ============================================================
+    cron.schedule('0 3 * * 1', async () => {
+        console.log("📀 [BACKUP] Backup hebdomadaire complet...");
+        await runFullBackup();
+    });
 
-// Backup du lundi matin à 3h00 (plus complet)
-cron.schedule('0 3 * * 1', async () => {
-    console.log("📀 [BACKUP] Backup hebdomadaire complet...");
-    await runFullBackup();
-});
+    // ============================================================
+    // 6. RAPPEL POINTAGE MATIN (9h, du lundi au vendredi)
+    // ============================================================
+    cron.schedule('0 9 * * 1-5', async () => {
+        console.log("🔔 [NOTIF] Envoi des rappels de pointage matin...");
+        await notificationService.sendMorningReminder();
+    });
 
-// Rappel de pointage à 9h
-cron.schedule('0 9 * * 1-5', async () => {
-    console.log("🔔 [NOTIF] Envoi des rappels de pointage matin...");
-    await notificationService.sendMorningReminder();
-});
+    // ============================================================
+    // 7. RAPPEL POINTAGE SOIR (18h, du lundi au vendredi)
+    // ============================================================
+    cron.schedule('0 18 * * 1-5', async () => {
+        console.log("🔔 [NOTIF] Envoi des rappels de pointage soir...");
+        await notificationService.sendEveningReminder();
+    });
 
-// Rappel de pointage à 18h
-cron.schedule('0 18 * * 1-5', async () => {
-    console.log("🔔 [NOTIF] Envoi des rappels de pointage soir...");
-    await notificationService.sendEveningReminder();
-});
+    // ============================================================
+    // 8. ALERTE MÉTÉO (6h, tous les jours)
+    // ============================================================
+    cron.schedule('0 6 * * *', async () => {
+        console.log("🌤️ [NOTIF] Vérification météo...");
+        await notificationService.sendWeatherAlert();
+    });
+};
 
-// Alerte météo à 6h du matin
-cron.schedule('0 6 * * *', async () => {
-    console.log("🌤️ [NOTIF] Vérification météo...");
-    await notificationService.sendWeatherAlert();
-});
 module.exports = startCronJobs;
