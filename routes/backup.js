@@ -41,7 +41,8 @@ router.get('/list-backups', async (req, res) => {
         return res.status(403).json({ error: "Accès refusé." });
     }
     
-    const backups = listBackups();
+    // 🔥 CORRECTION : ajouter await ici
+    const backups = await listBackups();
     res.json({ backups, count: backups.length });
 });
 
