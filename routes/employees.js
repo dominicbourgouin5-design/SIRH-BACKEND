@@ -4,12 +4,16 @@ const axios = require('axios');
 const router = express.Router();
 const supabase = require("../supabaseClient");
 const { checkPerm, getEndDate, sendEmailAPI } = require("../utils");
+const { getCache, setCache, clearCache } = require('../memoryCache');
 const { isValidEmail, isValidPhone, isValidDate, isValidAmount, isValidEmployeeType, sanitizeString } = require('../validation');
 
 // ============================================================
 // 1. CRÉATION PROFIL (WRITE)
 // ============================================================
 router.all("/write", async (req, res) => {
+  // Vider le cache quand on crée un employé
+  await clearCache('read_*');
+  
   if (!checkPerm(req, "can_create_profiles")) {
     return res.status(403).json({ error: "Accès refusé à la création de profils" });
   }
@@ -21,7 +25,7 @@ router.all("/write", async (req, res) => {
 
   const body = req.body;
   
-  // 🔥 VALIDATION DES DONNÉES
+  // VALIDATION DES DONNÉES
   if (!body.nom || body.nom.length < 2) {
     return res.status(400).json({ error: "Le nom est requis (minimum 2 caractères)" });
   }
@@ -189,7 +193,7 @@ router.all("/write", async (req, res) => {
 });
 
 // ============================================================
-// 2. LECTURE DES EMPLOYÉS (READ)
+// 2. LECTURE DES EMPLOYÉS (READ) AVEC CACHE
 // ============================================================
 router.all("/read", async (req, res) => {
   const page = parseInt(req.query.page) || 1;
@@ -202,6 +206,16 @@ router.all("/read", async (req, res) => {
   const dept = req.query.dept || "all";
   const targetId = req.query.target_id || "";
   const roleFilter = req.query.role || "all";
+
+  // Créer une clé de cache unique
+  const cacheKey = `read_${page}_${limit}_${search}_${status}_${type}_${dept}_${roleFilter}_${targetId}`;
+  
+  // Essayer de lire depuis le cache
+  const cachedData = await getCache(cacheKey);
+  if (cachedData) {
+    console.log(`📦 Cache hit: ${cacheKey}`);
+    return res.json(cachedData);
+  }
 
   try {
     const currentUserId = req.user.emp_id;
@@ -284,10 +298,16 @@ router.all("/read", async (req, res) => {
       .range(offset, offset + limit - 1);
 
     if (error) throw error;
-    return res.json({
+    
+    const result = {
       data,
       meta: { total: count, page: page, last_page: Math.ceil(count / limit) },
-    });
+    };
+    
+    // Sauvegarder en cache (60 secondes)
+    await setCache(cacheKey, result, 60);
+    
+    return res.json(result);
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
@@ -299,11 +319,10 @@ router.all("/read", async (req, res) => {
 router.all("/emp-update", async (req, res) => {
   const { id, email, phone, address, dob, doc_type } = req.body;
 
-  // 🔥 CORRECTION : Récupérer l'agent plus proprement
+  // Récupérer l'agent correctement
   const agentName = req.user?.nom || req.body.agent || "Employé";
   const agentRole = req.user?.role || req.body.agent_role || "EMPLOYEE";
 
-  // 1. IDENTIFICATION SÉCURISÉE
   const requesterId = String(req.user?.emp_id || req.body.emp_id);
   const targetId = String(id);
   const isOwner = requesterId === targetId;
@@ -311,13 +330,10 @@ router.all("/emp-update", async (req, res) => {
 
   console.log(`📝 Update ID ${targetId} (Type: ${doc_type}) par ${agentName} (Rôle: ${agentRole})`);
 
-  // Vérifier que l'utilisateur a le droit
   if (!isOwner && !isRH) {
     console.error(`🚫 Accès refusé: ${agentName} tente de modifier ${targetId}`);
     return res.status(403).json({ error: "Interdit : Vous ne pouvez modifier que votre profil." });
   }
-
-  console.log(`📝 Update ID ${targetId} (Type: ${doc_type}) par ${req.user.nom}`);
 
   const allowedForEmployee = ["text_update", "id_card", "photo"];
 
@@ -369,16 +385,13 @@ router.all("/emp-update", async (req, res) => {
       else if (doc_type === "attestation") updates.attestation_url = data.publicUrl;
       
       if (doc_type !== "text_update") {
-          // 🔥 Utiliser agentName au lieu de req.body.agent
-          const agentNameForArchive = agentName;
-          
           await supabase.from("employee_archives").insert([{
               employee_id: targetId,
               doc_type: doc_type,
               file_url: data.publicUrl,
-              agent: agentNameForArchive
+              agent: agentName
           }]);
-          console.log(`🗄️ Document archivé : ${doc_type} pour ID ${targetId} par ${agentNameForArchive}`);
+          console.log(`🗄️ Document archivé : ${doc_type} pour ID ${targetId} par ${agentName}`);
       }
     }
   }
@@ -421,6 +434,9 @@ router.all("/read-archives", async (req, res) => {
 // 5. MISE À JOUR ADMINISTRATIVE (UPDATE)
 // ============================================================
 router.all("/update", async (req, res) => {
+  // Vider le cache quand on modifie un employé
+  await clearCache('read_*');
+  
   if (!checkPerm(req, "can_see_employees")) {
     return res.status(403).json({ error: "Accès refusé à l'administration des profils" });
   }
@@ -500,6 +516,9 @@ router.all("/update", async (req, res) => {
 // 6. SUPPRIMER UN EMPLOYÉ
 // ============================================================
 router.all("/delete-employee", async (req, res) => {
+  // Vider le cache quand on supprime un employé
+  await clearCache('read_*');
+  
   if (!checkPerm(req, "can_delete_employees")) {
     return res.status(403).json({ error: "Accès refusé : Seul l'administrateur peut supprimer un profil." });
   }
