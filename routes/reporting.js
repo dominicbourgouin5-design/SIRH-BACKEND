@@ -113,4 +113,14 @@ router.get('/dashboard-stats', async (req, res) => {
     res.json(stats);
 });
 
+
+// Ajoute temporairement cette route dans `server.js` pour debug
+app.get('/api/debug-role', (req, res) => {
+    res.json({ 
+        role: req.user?.role,
+        permissions: req.user?.permissions,
+        user: req.user 
+    });
+});
+
 module.exports = router;
