@@ -2,9 +2,6 @@
 // Sauvegarde automatique des données critiques dans Supabase Storage
 
 const supabase = require('./supabaseClient');
-const fs = require('fs');
-const path = require('path');
-const os = require('os');
 
 // Tables à sauvegarder
 const BACKUP_TABLES = [
@@ -122,6 +119,8 @@ async function cleanOldBackups() {
             
         if (error) throw error;
         
+        if (!files || files.length === 0) return;
+        
         // Grouper par table
         const filesByTable = {};
         files.forEach(file => {
@@ -165,13 +164,15 @@ async function listBackups() {
             
         if (error) throw error;
         
+        if (!files || files.length === 0) return [];
+        
         const backups = files.map(file => {
             const fileSize = (file.metadata?.size || 0) / 1024;
             return {
                 name: file.name,
                 size: fileSize.toFixed(1) + ' KB',
                 date: file.created_at,
-                url: supabase.storage.from(BACKUP_BUCKET).getPublicUrl(file.name).data.publicUrl
+                table: file.name.split('_')[0]
             };
         }).sort((a, b) => new Date(b.date) - new Date(a.date));
         
