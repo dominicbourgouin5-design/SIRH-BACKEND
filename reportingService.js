@@ -2,7 +2,7 @@
 // Service de reporting avancé
 
 const supabase = require('./supabaseClient');
-const { sendEmailAPI } = require('./utils');
+const { sendEmailWithAttachment } = require('./utils');
 const ExcelJS = require('exceljs');
 
 // ============================================================
@@ -127,7 +127,7 @@ async function generatePayrollReport(month, year) {
 }
 
 // ============================================================
-// 2. ENVOI AUTOMATIQUE DE RAPPORTS PAR EMAIL
+// 2. ENVOI AUTOMATIQUE DE RAPPORTS PAR EMAIL (AVEC PIÈCES JOINTES)
 // ============================================================
 
 // Envoyer le rapport mensuel à la fin du mois
@@ -138,58 +138,99 @@ async function sendMonthlyReport() {
     const monthNames = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
     const monthName = monthNames[lastMonth - 1];
     
+    if (lastMonth === 0) {
+        console.log("📧 [REPORT] Mois de janvier, pas de rapport précédent");
+        return;
+    }
+    
     console.log(`📧 [REPORT] Envoi du rapport mensuel ${monthName} ${year}...`);
     
-    // Générer les rapports
-    const attendanceWorkbook = await generateAttendanceReport(lastMonth, year);
-    const payrollWorkbook = await generatePayrollReport(monthName, year);
-    
-    // Convertir en buffers
-    const attendanceBuffer = await attendanceWorkbook.xlsx.writeBuffer();
-    const payrollBuffer = await payrollWorkbook.xlsx.writeBuffer();
-    
-    // Récupérer les destinataires (RH + Admins)
-    const { data: admins } = await supabase
-        .from('employees')
-        .select('email')
-        .in('role', ['ADMIN', 'RH']);
-    
-    const emails = admins.map(a => a.email);
-    
-    // Créer le HTML de l'email
-    const emailHtml = `
-    <div style="font-family: 'Segoe UI', sans-serif; max-width: 600px; margin: auto; background: #ffffff; border-radius: 16px; overflow: hidden;">
-        <div style="background: #0f172a; padding: 30px; text-align: center;">
-            <img src="https://cdn-icons-png.flaticon.com/512/9752/9752284.png" style="width: 60px;">
-            <h1 style="color: white; margin: 10px 0 0 0;">Rapport Mensuel</h1>
-            <p style="color: #94a3b8;">${monthName} ${year}</p>
-        </div>
-        <div style="padding: 30px;">
-            <p>Bonjour,</p>
-            <p>Veuillez trouver ci-joints les rapports mensuels du <strong>${monthName} ${year}</strong>.</p>
-            
-            <div style="background: #f1f5f9; padding: 15px; border-radius: 12px; margin: 20px 0;">
-                <h3 style="margin: 0 0 10px 0;">📊 Contenu des rapports</h3>
-                <ul style="margin: 0; padding-left: 20px;">
-                    <li>📋 Présences et absences</li>
-                    <li>💰 Bulletin de paie récapitulatif</li>
-                    <li>⏰ Heures travaillées</li>
-                    <li>📈 Évolution par département</li>
-                </ul>
+    try {
+        // Générer les rapports
+        const attendanceWorkbook = await generateAttendanceReport(lastMonth, year);
+        const payrollWorkbook = await generatePayrollReport(monthName, year);
+        
+        // Convertir en buffers
+        const attendanceBuffer = await attendanceWorkbook.xlsx.writeBuffer();
+        const payrollBuffer = await payrollWorkbook.xlsx.writeBuffer();
+        
+        // Convertir buffers en base64 pour Brevo
+        const attendanceBase64 = attendanceBuffer.toString('base64');
+        const payrollBase64 = payrollBuffer.toString('base64');
+        
+        // Pièces jointes
+        const attachments = [
+            {
+                name: `Presences_${monthName}_${year}.xlsx`,
+                content: attendanceBase64
+            },
+            {
+                name: `Salaires_${monthName}_${year}.xlsx`,
+                content: payrollBase64
+            }
+        ];
+        
+        // Récupérer les destinataires (RH + Admins)
+        const { data: admins } = await supabase
+            .from('employees')
+            .select('email, nom')
+            .in('role', ['ADMIN', 'RH']);
+        
+        if (!admins || admins.length === 0) {
+            console.log("📧 [REPORT] Aucun destinataire trouvé (ADMIN ou RH)");
+            return;
+        }
+        
+        // Créer le HTML de l'email
+        const emailHtml = `
+        <div style="font-family: 'Segoe UI', sans-serif; max-width: 600px; margin: auto; background: #ffffff; border-radius: 16px; overflow: hidden;">
+            <div style="background: #0f172a; padding: 30px; text-align: center;">
+                <img src="https://cdn-icons-png.flaticon.com/512/9752/9752284.png" style="width: 60px;">
+                <h1 style="color: white; margin: 10px 0 0 0;">Rapport Mensuel</h1>
+                <p style="color: #94a3b8;">${monthName} ${year}</p>
             </div>
-            
-            <p style="color: #64748b; font-size: 12px;">Ce rapport est généré automatiquement par SIRH SECURE.</p>
-        </div>
-        <div style="background: #f8fafc; padding: 20px; text-align: center; font-size: 11px; color: #94a3b8;">
-            SIRH SECURE - Système de Gestion RH
-        </div>
-    </div>`;
-    
-    // Envoyer les emails
-    for (const email of emails) {
-        // Note: Pour les pièces jointes, il faudrait utiliser un service comme Sendinblue
-        await sendEmailAPI(email, `📊 Rapport Mensuel ${monthName} ${year}`, emailHtml);
-        console.log(`✅ Rapport envoyé à ${email}`);
+            <div style="padding: 30px;">
+                <p>Bonjour,</p>
+                <p>Veuillez trouver ci-joints les rapports mensuels du <strong>${monthName} ${year}</strong>.</p>
+                
+                <div style="background: #f1f5f9; padding: 15px; border-radius: 12px; margin: 20px 0;">
+                    <h3 style="margin: 0 0 10px 0;">📊 Contenu des rapports</h3>
+                    <ul style="margin: 0; padding-left: 20px;">
+                        <li>📋 <strong>Presences_${monthName}_${year}.xlsx</strong> - Présences et absences</li>
+                        <li>💰 <strong>Salaires_${monthName}_${year}.xlsx</strong> - Récapitulatif des salaires</li>
+                    </ul>
+                </div>
+                
+                <p style="color: #64748b; font-size: 12px;">Ce rapport est généré automatiquement par SIRH SECURE.</p>
+            </div>
+            <div style="background: #f8fafc; padding: 20px; text-align: center; font-size: 11px; color: #94a3b8;">
+                SIRH SECURE - Système de Gestion RH
+            </div>
+        </div>`;
+        
+        // Envoyer les emails avec pièces jointes
+        let sentCount = 0;
+        for (const admin of admins) {
+            if (admin.email) {
+                const success = await sendEmailWithAttachment(
+                    admin.email, 
+                    `📊 Rapport Mensuel ${monthName} ${year}`, 
+                    emailHtml, 
+                    attachments
+                );
+                if (success) {
+                    sentCount++;
+                    console.log(`📧 Rapport envoyé à ${admin.email} (${admin.nom})`);
+                }
+            }
+        }
+        
+        console.log(`✅ [REPORT] ${sentCount} rapports envoyés sur ${admins.length} destinataires`);
+        return { sent: sentCount, total: admins.length };
+        
+    } catch (error) {
+        console.error("❌ [REPORT] Erreur:", error.message);
+        return { error: error.message };
     }
 }
 
@@ -205,7 +246,7 @@ async function getDashboardWidgets(role) {
         .eq('role', role)
         .order('order_index', { ascending: true });
     
-    if (error) return getDefaultWidgets(role);
+    if (error || !data || data.length === 0) return getDefaultWidgets(role);
     return data;
 }
 
