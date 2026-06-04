@@ -5,10 +5,9 @@ const multer = require("multer");
 const jwt = require("jsonwebtoken");
 const rateLimit = require('express-rate-limit');
 const compression = require('compression');
-const reportingRoutes = require('./routes/reporting');
-
 
 // --- IMPORTS DES MODULES ---
+const reportingRoutes = require('./routes/reporting');
 const backupRoutes = require('./routes/backup');
 const { responseTimeMiddleware, getHealthStatus } = require('./monitoring');
 const crmRoutes = require("./routes/crm");
@@ -27,12 +26,12 @@ const startCronJobs = require("./cron");
 const app = express();
 
 // ============================================================
-// 🔥 CONFIGURATION TRUST PROXY (POUR RENDER)
+// CONFIGURATION TRUST PROXY
 // ============================================================
 app.set('trust proxy', 1);
 
 // ============================================================
-// 🔥 RATE LIMITING - Protection contre les attaques
+// RATE LIMITING
 // ============================================================
 
 const limiterConfig = {
@@ -120,14 +119,13 @@ app.use(express.json({ limit: '15mb' }));
 app.use(express.urlencoded({ limit: '15mb', extended: true }));
 
 // ============================================================
-// 🔥 APPLICATION DES LIMITEURS AUX ROUTES
+// APPLICATION DES LIMITEURS AUX ROUTES
 // ============================================================
 
 app.use("/api", globalLimiter);
 app.use("/api/login", authLimiter);
 app.use("/api/verify-2fa", authLimiter);
 app.use("/api/request-password-reset", authLimiter);
-app.use("/api", reportingRoutes);
 app.use("/api/reset-password", authLimiter);
 app.use("/api/write", writeLimiter);
 app.use("/api/update", writeLimiter);
@@ -149,7 +147,7 @@ console.log("   - Write: 50 req/heure");
 console.log("   - Upload: 30 req/heure");
 
 // ============================================================
-// ROUTE DE SANTÉ PUBLIQUE (POUR LE MONITORING)
+// ROUTES PUBLIQUES
 // ============================================================
 app.get('/api/health', async (req, res) => {
     try {
@@ -160,7 +158,6 @@ app.get('/api/health', async (req, res) => {
     }
 });
 
-// Route de ping simple (pour vérifier que le serveur répond)
 app.get('/api/ping', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
@@ -209,11 +206,13 @@ const authenticateToken = (req, res, next) => {
 };
 
 // ============================================================
-// ROUTES PRINCIPALES
+// ROUTES PRINCIPALES (TOUTES PROTÉGÉES PAR JWT)
 // ============================================================
 
 app.use("/api", authenticateToken);
 app.use("/api", upload.any());
+
+// Routes API
 app.use("/api", authRoutes);
 app.use("/api", employeeRoutes);
 app.use("/api", payrollRoutes);
@@ -225,7 +224,19 @@ app.use("/api", catalogRoutes);
 app.use("/api", chatRoutes);
 app.use("/api", systemRoutes);
 app.use("/api", crmRoutes);
-app.use("/api", backupRoutes);  // ← Les routes de backup
+app.use("/api", backupRoutes);
+app.use("/api", reportingRoutes);  // ⚠️ PLACER ICI, APRÈS authenticateToken
+
+// ============================================================
+// ROUTE DEBUG (optionnelle)
+// ============================================================
+app.get('/api/debug-role', authenticateToken, (req, res) => {
+    res.json({ 
+        role: req.user?.role,
+        permissions: req.user?.permissions,
+        user: req.user 
+    });
+});
 
 // ============================================================
 // GESTIONNAIRE D'ERREURS GLOBAL
@@ -282,15 +293,4 @@ app.listen(PORT, () => {
   `);
 });
 
-
-
-// Ajoute temporairement cette route dans `server.js` pour debug
-app.get('/api/debug-role', (req, res) => {
-    res.json({ 
-        role: req.user?.role,
-        permissions: req.user?.permissions,
-        user: req.user 
-    });
-});
-
-module.exports = router;
+ 
