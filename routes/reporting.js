@@ -12,10 +12,23 @@ const {
 } = require('../reportingService');
 const { checkPerm } = require('../utils');
 
-// Générer rapport des présences (Excel) - accessible à ADMIN et RH
+// Helper pour vérifier le rôle
+function isAdminOrRH(user) {
+    const role = user?.role || user?.user?.role;
+    return role === 'ADMIN' || role === 'RH';
+}
+
+// Helper pour vérifier si c'est ADMIN
+function isAdmin(user) {
+    const role = user?.role || user?.user?.role;
+    return role === 'ADMIN';
+}
+
+// Générer rapport des présences (Excel)
 router.get('/export-attendance', async (req, res) => {
-    const userRole = req.user?.role;
-    if (userRole !== 'ADMIN' && userRole !== 'RH') {
+    console.log("🔍 Rôle utilisateur:", req.user?.role);
+    
+    if (!isAdminOrRH(req.user)) {
         return res.status(403).json({ error: "Accès refusé. Réservé aux administrateurs." });
     }
     
@@ -34,16 +47,12 @@ router.get('/export-attendance', async (req, res) => {
     }
 });
 
-// Générer rapport des salaires (Excel) - accessible à ADMIN et RH (paie)
+// Générer rapport des salaires (Excel)
 router.get('/export-payroll', async (req, res) => {
-    const userRole = req.user?.role;
-    if (userRole !== 'ADMIN' && userRole !== 'RH') {
-        return res.status(403).json({ error: "Accès refusé. Réservé aux administrateurs." });
-    }
+    console.log("🔍 Rôle utilisateur:", req.user?.role);
     
-    // Vérifier la permission spécifique pour la paie
-    if (!checkPerm(req, 'can_see_payroll') && userRole !== 'ADMIN') {
-        return res.status(403).json({ error: "Accès refusé. Permission paie requise." });
+    if (!isAdminOrRH(req.user)) {
+        return res.status(403).json({ error: "Accès refusé. Réservé aux administrateurs." });
     }
     
     try {
@@ -61,10 +70,11 @@ router.get('/export-payroll', async (req, res) => {
     }
 });
 
-// Envoyer rapport mensuel - accessible à ADMIN
+// Envoyer rapport mensuel
 router.post('/send-monthly-report', async (req, res) => {
-    const userRole = req.user?.role;
-    if (userRole !== 'ADMIN') {
+    console.log("🔍 Rôle utilisateur:", req.user?.role);
+    
+    if (!isAdmin(req.user)) {
         return res.status(403).json({ error: "Accès refusé. Réservé aux administrateurs." });
     }
     
@@ -77,7 +87,7 @@ router.post('/send-monthly-report', async (req, res) => {
     }
 });
 
-// Récupérer les widgets du dashboard - accessible à tous
+// Récupérer les widgets du dashboard
 router.get('/dashboard-widgets', async (req, res) => {
     const role = req.user?.role || 'EMPLOYEE';
     const widgets = await getDashboardWidgets(role);
@@ -97,7 +107,7 @@ router.get('/dashboard-prefs', async (req, res) => {
     res.json(prefs || []);
 });
 
-// Statistiques du dashboard - accessible à tous
+// Statistiques du dashboard
 router.get('/dashboard-stats', async (req, res) => {
     const stats = await getDashboardStats(req.user?.role, req.user?.emp_id);
     res.json(stats);
