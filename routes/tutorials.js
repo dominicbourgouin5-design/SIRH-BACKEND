@@ -17,7 +17,7 @@ router.use((req, res, next) => {
     next();
 });
 
-// GET /api/tutorials
+// GET /api/tutorials - Récupérer tous les tutoriels disponibles
 router.get('/tutorials', async (req, res) => {
     try {
         const role = req.user?.role || 'EMPLOYEE';
@@ -29,10 +29,13 @@ router.get('/tutorials', async (req, res) => {
     }
 });
 
-// POST /api/tutorials/start
+// POST /api/tutorials/start - Démarrer un tutoriel
 router.post('/tutorials/start', async (req, res) => {
     try {
         const { tutorialId } = req.body;
+        if (!tutorialId) {
+            return res.status(400).json({ error: "tutorialId requis" });
+        }
         const progress = await startTutorial(req.user.id, tutorialId);
         res.json(progress);
     } catch (error) {
@@ -41,10 +44,13 @@ router.post('/tutorials/start', async (req, res) => {
     }
 });
 
-// POST /api/tutorials/next
+// POST /api/tutorials/next - Passer à l'étape suivante
 router.post('/tutorials/next', async (req, res) => {
     try {
         const { tutorialId, currentStep, completedStep } = req.body;
+        if (!tutorialId) {
+            return res.status(400).json({ error: "tutorialId requis" });
+        }
         const progress = await nextStep(req.user.id, tutorialId, currentStep, completedStep);
         res.json(progress);
     } catch (error) {
@@ -53,22 +59,28 @@ router.post('/tutorials/next', async (req, res) => {
     }
 });
 
-// POST /api/tutorials/reset
+// POST /api/tutorials/reset - Réinitialiser un tutoriel
 router.post('/tutorials/reset', async (req, res) => {
     try {
         const { tutorialId } = req.body;
+        if (!tutorialId) {
+            return res.status(400).json({ error: "tutorialId requis" });
+        }
         const progress = await resetTutorial(req.user.id, tutorialId);
-        res.json(progress);
+        res.json(progress || { status: "reset", tutorialId });
     } catch (error) {
         console.error("Erreur POST /tutorials/reset:", error.message);
         res.status(500).json({ error: error.message });
     }
 });
 
-// POST /api/tutorials/complete
+// POST /api/tutorials/complete - Marquer un tutoriel comme terminé
 router.post('/tutorials/complete', async (req, res) => {
     try {
         const { tutorialId } = req.body;
+        if (!tutorialId) {
+            return res.status(400).json({ error: "tutorialId requis" });
+        }
         const progress = await completeTutorial(req.user.id, tutorialId);
         res.json(progress);
     } catch (error) {
@@ -77,7 +89,7 @@ router.post('/tutorials/complete', async (req, res) => {
     }
 });
 
-// GET /api/tutorials/should-show
+// GET /api/tutorials/should-show - Vérifier si afficher le tutoriel de bienvenue
 router.get('/tutorials/should-show', async (req, res) => {
     try {
         const show = await shouldShowTutorial(req.user.id, req.user?.role);
