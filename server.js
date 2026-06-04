@@ -8,6 +8,7 @@ const rateLimit = require('express-rate-limit');
 // --- IMPORTS DES MODULES ---
 const { responseTimeMiddleware, getHealthStatus } = require('./monitoring');
 const crmRoutes = require("./routes/crm");
+const compression = require('compression');
 const authRoutes = require("./routes/auth");
 const employeeRoutes = require("./routes/employees");
 const payrollRoutes = require("./routes/payroll");
@@ -117,7 +118,7 @@ app.use(express.urlencoded({ limit: '15mb', extended: true }));
 // ============================================================
 // 🔥 APPLICATION DES LIMITEURS AUX ROUTES
 // ============================================================
-
+app.use(compression()); // Compresse les réponses JSON
 app.use("/api", globalLimiter);
 app.use("/api/login", authLimiter);
 app.use("/api/verify-2fa", authLimiter);
