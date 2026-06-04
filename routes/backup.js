@@ -56,4 +56,26 @@ router.get('/backup-tables', async (req, res) => {
     res.json({ tables: BACKUP_TABLES });
 });
 
+
+// Vérifier les backups dans Supabase
+router.get('/check-backups', async (req, res) => {
+    const userRole = req.user?.role;
+    if (userRole !== 'ADMIN' && userRole !== 'RH') {
+        return res.status(403).json({ error: "Accès refusé." });
+    }
+    
+    try {
+        // Lister directement via Supabase admin
+        const { data, error } = await supabase.storage
+            .from('backups')
+            .list();
+            
+        if (error) throw error;
+        
+        res.json({ files: data, count: data?.length || 0 });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 module.exports = router;
