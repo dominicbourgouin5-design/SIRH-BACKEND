@@ -6,6 +6,7 @@ const jwt = require("jsonwebtoken");
 const rateLimit = require('express-rate-limit');
 
 // --- IMPORTS DES MODULES ---
+const { responseTimeMiddleware, getHealthStatus } = require('./monitoring');
 const crmRoutes = require("./routes/crm");
 const authRoutes = require("./routes/auth");
 const employeeRoutes = require("./routes/employees");
@@ -113,6 +114,8 @@ app.use(cors({
     allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true
 }));
+
+app.use(responseTimeMiddleware);  // Mesure le temps de réponse
 
 // Middleware JSON et URL encodé
 app.use(express.json({ limit: '15mb' }));
@@ -238,6 +241,11 @@ app.use((err, req, res, next) => {
   });
 });
 
+
+app.get('/api/health', async (req, res) => {
+    const status = await getHealthStatus();
+    res.json(status);
+});
 // ============================================================
 // DEMARRAGE DU SERVEUR ET CRON
 // ============================================================
