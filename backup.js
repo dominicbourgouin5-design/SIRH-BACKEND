@@ -1,9 +1,10 @@
 // backup.js
-// Sauvegarde automatique des données critiques
+// Sauvegarde automatique des données critiques dans Supabase Storage
 
 const supabase = require('./supabaseClient');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 
 // Tables à sauvegarder
 const BACKUP_TABLES = [
@@ -16,18 +17,31 @@ const BACKUP_TABLES = [
     'crm_leads'
 ];
 
-// Dossier de sauvegarde (utilise /tmp sur Render car espace limité)
-const BACKUP_DIR = process.env.BACKUP_DIR || '/tmp/sirh_backups';
+// Bucket Supabase pour les backups
+const BACKUP_BUCKET = 'backups';
 
-// Créer le dossier s'il n'existe pas
-function ensureBackupDir() {
-    if (!fs.existsSync(BACKUP_DIR)) {
-        fs.mkdirSync(BACKUP_DIR, { recursive: true });
-        console.log(`📁 Dossier de backup créé: ${BACKUP_DIR}`);
+// Créer le bucket s'il n'existe pas
+async function ensureBackupBucket() {
+    try {
+        const { data: buckets, error: listError } = await supabase.storage.listBuckets();
+        if (listError) throw listError;
+        
+        const bucketExists = buckets.some(b => b.name === BACKUP_BUCKET);
+        if (!bucketExists) {
+            const { error: createError } = await supabase.storage.createBucket(BACKUP_BUCKET, {
+                public: false,
+                allowedMimeTypes: ['application/json'],
+                fileSizeLimit: 10485760 // 10MB
+            });
+            if (createError) throw createError;
+            console.log(`📦 Bucket '${BACKUP_BUCKET}' créé avec succès`);
+        }
+    } catch (error) {
+        console.error("Erreur création bucket:", error.message);
     }
 }
 
-// Sauvegarde une table
+// Sauvegarde une table dans Supabase Storage
 async function backupTable(tableName) {
     console.log(`💾 Backup de la table ${tableName}...`);
     
@@ -35,10 +49,11 @@ async function backupTable(tableName) {
         const { data, error, count } = await supabase
             .from(tableName)
             .select('*', { count: 'exact' })
-            .limit(50000); // Limite de sécurité
+            .limit(50000);
             
         if (error) throw error;
         
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
         const backupData = {
             table: tableName,
             timestamp: new Date().toISOString(),
@@ -47,10 +62,18 @@ async function backupTable(tableName) {
             version: '1.0'
         };
         
-        const fileName = `${tableName}_${Date.now()}.json`;
-        const filePath = path.join(BACKUP_DIR, fileName);
+        const fileName = `${tableName}_${timestamp}.json`;
+        const fileContent = JSON.stringify(backupData, null, 2);
         
-        fs.writeFileSync(filePath, JSON.stringify(backupData, null, 2));
+        // Upload vers Supabase Storage
+        const { error: uploadError } = await supabase.storage
+            .from(BACKUP_BUCKET)
+            .upload(fileName, Buffer.from(fileContent), {
+                contentType: 'application/json',
+                upsert: true
+            });
+            
+        if (uploadError) throw uploadError;
         
         console.log(`✅ Backup ${tableName}: ${backupData.count} lignes → ${fileName}`);
         return { success: true, count: backupData.count, file: fileName };
@@ -65,9 +88,9 @@ async function backupTable(tableName) {
 async function runFullBackup() {
     const startTime = Date.now();
     console.log("\n💾 [BACKUP] Début de la sauvegarde complète...");
-    console.log(`📁 Destination: ${BACKUP_DIR}`);
+    console.log(`📦 Destination: Supabase Storage (${BACKUP_BUCKET})`);
     
-    ensureBackupDir();
+    await ensureBackupBucket();
     
     const results = [];
     
@@ -84,39 +107,47 @@ async function runFullBackup() {
     console.log(`   ✅ Succès: ${successCount} tables`);
     console.log(`   ❌ Échecs: ${failCount} tables`);
     
-    // Nettoyer les vieux backups (garder seulement les 7 derniers jours)
+    // Nettoyer les vieux backups (garder les 7 plus récents)
     await cleanOldBackups();
     
     return { results, duration, successCount, failCount };
 }
 
-// Nettoyer les backups de plus de 7 jours
+// Nettoyer les vieux backups (garder seulement les 7 plus récents par table)
 async function cleanOldBackups() {
-    const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
-    let deletedCount = 0;
-    
     try {
-        const files = fs.readdirSync(BACKUP_DIR);
-        
-        for (const file of files) {
-            const filePath = path.join(BACKUP_DIR, file);
-            const stats = fs.statSync(filePath);
+        const { data: files, error } = await supabase.storage
+            .from(BACKUP_BUCKET)
+            .list();
             
-            if (stats.mtimeMs < sevenDaysAgo) {
-                fs.unlinkSync(filePath);
-                deletedCount++;
-            }
-        }
+        if (error) throw error;
         
-        if (deletedCount > 0) {
-            console.log(`🧹 Nettoyage: ${deletedCount} anciens backups supprimés`);
+        // Grouper par table
+        const filesByTable = {};
+        files.forEach(file => {
+            const tableName = file.name.split('_')[0];
+            if (!filesByTable[tableName]) filesByTable[tableName] = [];
+            filesByTable[tableName].push(file);
+        });
+        
+        // Pour chaque table, garder seulement les 7 plus récents
+        for (const table in filesByTable) {
+            const sorted = filesByTable[table].sort((a, b) => 
+                new Date(b.created_at) - new Date(a.created_at)
+            );
+            
+            const toDelete = sorted.slice(7);
+            for (const file of toDelete) {
+                await supabase.storage.from(BACKUP_BUCKET).remove([file.name]);
+                console.log(`🧹 Ancien backup supprimé: ${file.name}`);
+            }
         }
     } catch (error) {
         console.error("Erreur nettoyage backups:", error.message);
     }
 }
 
-// Sauvegarde d'une table spécifique (appel API)
+// Sauvegarde d'une table spécifique
 async function backupSingleTable(tableName) {
     const validTables = BACKUP_TABLES;
     if (!validTables.includes(tableName)) {
@@ -126,20 +157,23 @@ async function backupSingleTable(tableName) {
 }
 
 // Récupérer la liste des backups disponibles
-function listBackups() {
-    ensureBackupDir();
-    
+async function listBackups() {
     try {
-        const files = fs.readdirSync(BACKUP_DIR);
+        const { data: files, error } = await supabase.storage
+            .from(BACKUP_BUCKET)
+            .list();
+            
+        if (error) throw error;
+        
         const backups = files.map(file => {
-            const filePath = path.join(BACKUP_DIR, file);
-            const stats = fs.statSync(filePath);
+            const fileSize = (file.metadata?.size || 0) / 1024;
             return {
-                name: file,
-                size: (stats.size / 1024).toFixed(1) + ' KB',
-                date: stats.mtime
+                name: file.name,
+                size: fileSize.toFixed(1) + ' KB',
+                date: file.created_at,
+                url: supabase.storage.from(BACKUP_BUCKET).getPublicUrl(file.name).data.publicUrl
             };
-        }).sort((a, b) => b.date - a.date);
+        }).sort((a, b) => new Date(b.date) - new Date(a.date));
         
         return backups;
     } catch (error) {
