@@ -27,7 +27,8 @@
     "jimp": "^0.22.10",
      "ws": "^8.14.0",
     "express-rate-limit": "^7.1.5",
-    "compression": "^1.7.4"
+    "compression": "^1.7.4",
+    "exceljs": "^4.4.0"
     
 
   }
