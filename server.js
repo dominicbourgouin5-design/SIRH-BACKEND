@@ -4,12 +4,12 @@ const cors = require("cors");
 const multer = require("multer");
 const jwt = require("jsonwebtoken");
 const rateLimit = require('express-rate-limit');
+const compression = require('compression');
 
 // --- IMPORTS DES MODULES ---
 const backupRoutes = require('./routes/backup');
 const { responseTimeMiddleware, getHealthStatus } = require('./monitoring');
 const crmRoutes = require("./routes/crm");
-const compression = require('compression');
 const authRoutes = require("./routes/auth");
 const employeeRoutes = require("./routes/employees");
 const payrollRoutes = require("./routes/payroll");
@@ -112,6 +112,7 @@ app.use(cors({
 }));
 
 // Middlewares
+app.use(compression());
 app.use(responseTimeMiddleware);
 app.use(express.json({ limit: '15mb' }));
 app.use(express.urlencoded({ limit: '15mb', extended: true }));
@@ -119,8 +120,7 @@ app.use(express.urlencoded({ limit: '15mb', extended: true }));
 // ============================================================
 // 🔥 APPLICATION DES LIMITEURS AUX ROUTES
 // ============================================================
-app.use("/api", backupRoutes);
-app.use(compression()); // Compresse les réponses JSON
+
 app.use("/api", globalLimiter);
 app.use("/api/login", authLimiter);
 app.use("/api/verify-2fa", authLimiter);
@@ -222,6 +222,7 @@ app.use("/api", catalogRoutes);
 app.use("/api", chatRoutes);
 app.use("/api", systemRoutes);
 app.use("/api", crmRoutes);
+app.use("/api", backupRoutes);  // ← Les routes de backup
 
 // ============================================================
 // GESTIONNAIRE D'ERREURS GLOBAL
@@ -273,6 +274,7 @@ app.listen(PORT, () => {
   🛡️  Rate Limiting : Activé ✅
   🏢  Trust Proxy : Configuré ✅
   💚  Health Check : /api/health ✅
+  💾  Backup : Activé ✅
   -----------------------------------
   `);
 });
