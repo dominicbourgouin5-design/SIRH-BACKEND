@@ -124,7 +124,6 @@ app.use(express.urlencoded({ limit: '15mb', extended: true }));
 // ============================================================
 
 app.use("/api", globalLimiter);
-app.use("/api", tutorialRoutes);
 app.use("/api/login", authLimiter);
 app.use("/api/verify-2fa", authLimiter);
 app.use("/api/request-password-reset", authLimiter);
@@ -149,7 +148,7 @@ console.log("   - Write: 50 req/heure");
 console.log("   - Upload: 30 req/heure");
 
 // ============================================================
-// ROUTES PUBLIQUES
+// ROUTES PUBLIQUES (SANS AUTHENTIFICATION)
 // ============================================================
 app.get('/api/health', async (req, res) => {
     try {
@@ -183,8 +182,7 @@ const authenticateToken = (req, res, next) => {
     "/request-password-reset",
     "/reset-password",
     "/health",
-    "/ping",
-    "/tutorials" 
+    "/ping"
   ];
 
   const isPublic = publicPaths.some((path) => req.path.includes(path));
@@ -228,7 +226,8 @@ app.use("/api", chatRoutes);
 app.use("/api", systemRoutes);
 app.use("/api", crmRoutes);
 app.use("/api", backupRoutes);
-app.use("/api", reportingRoutes);  // ⚠️ PLACER ICI, APRÈS authenticateToken
+app.use("/api", reportingRoutes);
+app.use("/api", tutorialRoutes);  // ← Tutoriel APRÈS authenticateToken
 
 // ============================================================
 // ROUTE DEBUG (optionnelle)
@@ -295,5 +294,3 @@ app.listen(PORT, () => {
   -----------------------------------
   `);
 });
-
- 
