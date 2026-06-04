@@ -6,6 +6,8 @@ const { sendEmailAPI, sendPushNotification } = require('./utils');
 const { runMonitoring } = require('./monitoring');
 const { runFullBackup } = require('./backup');
 const notificationService = require('./notificationService');
+const { sendMonthlyReport } = require('./reportingService');
+
 
 const startCronJobs = () => {
     // ============================================================
@@ -250,5 +252,15 @@ const startCronJobs = () => {
         await notificationService.sendWeatherAlert();
     });
 };
+
+// Envoi du rapport mensuel le dernier jour du mois à 8h
+cron.schedule('0 8 28-31 * *', async () => {
+    const now = new Date();
+    const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    if (now.getDate() === lastDay) {
+        console.log("📧 [REPORT] Envoi du rapport mensuel...");
+        await sendMonthlyReport();
+    }
+});
 
 module.exports = startCronJobs;
