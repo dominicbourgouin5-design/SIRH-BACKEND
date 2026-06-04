@@ -3,15 +3,21 @@ const supabase = require("./supabaseClient");
 const webpush = require('web-push');
 const Jimp = require('jimp');
 
-
+// ============================================================
+// FONCTIONS DE DATE
+// ============================================================
 
 // Fonction pour calculer la date de fin (Date début + nombre de jours)
 const getEndDate = (startDate, days) => {
   if (!startDate || !days) return null;
   const date = new Date(startDate);
   date.setDate(date.getDate() + parseInt(days));
-  return date.toISOString().split("T")[0]; // Renvoie format YYYY-MM-DD
+  return date.toISOString().split("T")[0];
 };
+
+// ============================================================
+// FONCTIONS DE SÉCURITÉ ET PERMISSIONS
+// ============================================================
 
 async function isTargetAuthorized(requester, targetId) {
   // 1. Si le demandeur est ADMIN ou RH, il a tous les droits
@@ -49,29 +55,30 @@ function checkPerm(req, permissionName) {
   );
 }
 
+// ============================================================
+// CALCUL AUTO-CLÔTURE
+// ============================================================
 
+function calculateAutoClose(startMs, isSecurity) {
+  const startDate = new Date(startMs);
+  if (isSecurity) {
+    // Pour la sécurité/nuit : Forfait de 12 heures de garde
+    return startMs + (12 * 60 * 60 * 1000);
+  } else {
+    // Pour bureau/mobile : Clôture à 18h00 le jour même
+    const eighteenHour = new Date(startDate);
+    eighteenHour.setHours(18, 0, 0, 0);
+    
+    // Si l'entrée était déjà après 18h, on accorde 1h symbolique, sinon 18h
+    return (startDate.getTime() >= eighteenHour.getTime()) 
+      ? startDate.getTime() + (60 * 60 * 1000) 
+      : eighteenHour.getTime();
+  }
+}
 
-  function calculateAutoClose(startMs, isSecurity) {
-            const startDate = new Date(startMs);
-            if (isSecurity) {
-                // Pour la sécurité/nuit : Forfait de 12 heures de garde
-                return startMs + (12 * 60 * 60 * 1000);
-            } else {
-                // Pour bureau/mobile : Clôture à 18h00 le jour même
-                const eighteenHour = new Date(startDate);
-                eighteenHour.setHours(18, 0, 0, 0);
-                
-                // Si l'entrée était déjà après 18h, on accorde 1h symbolique, sinon 18h
-                return (startDate.getTime() >= eighteenHour.getTime()) 
-                    ? startDate.getTime() + (60 * 60 * 1000) 
-                    : eighteenHour.getTime();
-            }
-        }  
-
-
-
-
-
+// ============================================================
+// UTILITAIRES GPS
+// ============================================================
 
 // Fonction utilitaire pour calculer la distance (Formule de Haversine)
 function getDistanceInMeters(lat1, lon1, lat2, lon2) {
@@ -87,6 +94,11 @@ function getDistanceInMeters(lat1, lon1, lat2, lon2) {
   return R * c;
 }
 
+// ============================================================
+// ENVOI D'EMAILS (BREVO)
+// ============================================================
+
+// Envoi d'email simple (HTML uniquement)
 async function sendEmailAPI(toEmail, subject, htmlContent) {
   try {
     await axios.post(
@@ -115,6 +127,46 @@ async function sendEmailAPI(toEmail, subject, htmlContent) {
   }
 }
 
+// Envoi d'email avec pièces jointes (pour rapports Excel)
+async function sendEmailWithAttachment(toEmail, subject, htmlContent, attachments = []) {
+  try {
+    const payload = {
+      sender: { name: "SIRH SECURE", email: "nevillebouchard98@gmail.com" },
+      to: [{ email: toEmail }],
+      subject: subject,
+      htmlContent: htmlContent,
+    };
+    
+    // Ajouter les pièces jointes si présentes
+    if (attachments && attachments.length > 0) {
+      payload.attachment = attachments;
+    }
+    
+    await axios.post(
+      "https://api.brevo.com/v3/smtp/email",
+      payload,
+      {
+        headers: {
+          "api-key": (process.env.BREVO_API_KEY || "").trim(),
+          "Content-Type": "application/json",
+        },
+      },
+    );
+    console.log(`✅ Email avec ${attachments.length} pièce(s) jointe(s) envoyé à ${toEmail}`);
+    return true;
+  } catch (error) {
+    console.error(
+      "❌ Échec envoi email avec pièce jointe:",
+      error.response ? error.response.data : error.message,
+    );
+    return false;
+  }
+}
+
+// ============================================================
+// MODULES
+// ============================================================
+
 // Fonction pour vérifier si un module est actif
 async function isModuleActive(moduleKey) {
   const { data } = await supabase
@@ -122,90 +174,99 @@ async function isModuleActive(moduleKey) {
     .select("is_active")
     .eq("module_key", moduleKey)
     .single();
-  return data ? data.is_active : false; // Par défaut false si pas trouvé
+  return data ? data.is_active : false;
 }
 
-
+// ============================================================
+// NOTIFICATIONS PUSH
+// ============================================================
 
 /**
  * Envoie une notification Push à un utilisateur spécifique
  */
 async function sendPushNotification(userId, title, body, url = '/') {
-    // 1. Récupérer tous les abonnements (téléphones/PC) de cet utilisateur
-    const { data: subs, error } = await supabase
-        .from('push_subscriptions')
-        .select('*')
-        .eq('user_id', userId);
+  // 1. Récupérer tous les abonnements (téléphones/PC) de cet utilisateur
+  const { data: subs, error } = await supabase
+    .from('push_subscriptions')
+    .select('*')
+    .eq('user_id', userId);
 
-    if (error || !subs || subs.length === 0) return;
+  if (error || !subs || subs.length === 0) return;
 
-    // 2. Créer le message
-    const payload = JSON.stringify({ title, body, url });
+  // 2. Créer le message
+  const payload = JSON.stringify({ title, body, url });
 
-    // 3. Envoyer à chaque appareil enregistré
-    const tasks = subs.map(sub => {
-        const pushConfig = {
-            endpoint: sub.endpoint,
-            keys: { auth: sub.auth, p256dh: sub.p256dh }
-        };
+  // 3. Envoyer à chaque appareil enregistré
+  const tasks = subs.map(sub => {
+    const pushConfig = {
+      endpoint: sub.endpoint,
+      keys: { auth: sub.auth, p256dh: sub.p256dh }
+    };
 
-        return webpush.sendNotification(pushConfig, payload).catch(err => {
-            // Si le token n'est plus valide (app désinstallée), on nettoie la base
-            if (err.statusCode === 410 || err.statusCode === 404) {
-                return supabase.from('push_subscriptions').delete().eq('id', sub.id);
-            }
-            console.error("Erreur d'envoi Push :", err);
-        });
+    return webpush.sendNotification(pushConfig, payload).catch(err => {
+      // Si le token n'est plus valide (app désinstallée), on nettoie la base
+      if (err.statusCode === 410 || err.statusCode === 404) {
+        return supabase.from('push_subscriptions').delete().eq('id', sub.id);
+      }
+      console.error("Erreur d'envoi Push :", err);
     });
+  });
 
-    await Promise.all(tasks);
+  await Promise.all(tasks);
 }
 
+// ============================================================
+// WATERMARK (AJOUT DE FILIGRANE SUR LES PHOTOS)
+// ============================================================
 
 async function addWatermark(buffer, gps, nomAgent) {
-    try {
-        // 1. Charger l'image
-        const image = await Jimp.read(buffer);
-        
-        // 2. Préparer les textes (sécurité si données vides)
-        const name = (nomAgent || "Agent Inconnu").toUpperCase();
-        const coords = (gps && gps !== "0,0") ? `GPS: ${gps}` : "GPS NON DISPONIBLE";
-        const date = new Date().toLocaleString('fr-FR', { timeZone: 'Africa/Porto-Novo' });
-        
-        const watermarkText = `SIRH SECURE | ${name} | ${coords} | ${date}`;
+  try {
+    // 1. Charger l'image
+    const image = await Jimp.read(buffer);
+    
+    // 2. Préparer les textes (sécurité si données vides)
+    const name = (nomAgent || "Agent Inconnu").toUpperCase();
+    const coords = (gps && gps !== "0,0") ? `GPS: ${gps}` : "GPS NON DISPONIBLE";
+    const date = new Date().toLocaleString('fr-FR', { timeZone: 'Africa/Porto-Novo' });
+    
+    const watermarkText = `SIRH SECURE | ${name} | ${coords} | ${date}`;
 
-        // 3. Définir la taille du bandeau en fonction de l'image (5% de la hauteur)
-        const imgW = image.bitmap.width;
-        const imgH = image.bitmap.height;
-        const bannerH = Math.max(40, Math.round(imgH * 0.05)); 
+    // 3. Définir la taille du bandeau en fonction de l'image (5% de la hauteur)
+    const imgW = image.bitmap.width;
+    const imgH = image.bitmap.height;
+    const bannerH = Math.max(40, Math.round(imgH * 0.05)); 
 
-        // 4. Créer le bandeau de fond (Noir élégant, 70% opacité)
-        const banner = new Jimp(imgW, bannerH, '#000000b3');
+    // 4. Créer le bandeau de fond (Noir élégant, 70% opacité)
+    const banner = new Jimp(imgW, bannerH, '#000000b3');
 
-        // 5. Charger la police (S'adapte : petite si image étroite, normale sinon)
-        const font = (imgW < 600) ? Jimp.FONT_SANS_12_WHITE : Jimp.FONT_SANS_16_WHITE;
-        const loadedFont = await Jimp.loadFont(font);
+    // 5. Charger la police (S'adapte : petite si image étroite, normale sinon)
+    const font = (imgW < 600) ? Jimp.FONT_SANS_12_WHITE : Jimp.FONT_SANS_16_WHITE;
+    const loadedFont = await Jimp.loadFont(font);
 
-        // 6. Fusionner le tout
-        // On place le bandeau tout en bas
-        image.composite(banner, 0, imgH - bannerH);
-        
-        // On écrit le texte centré verticalement dans le bandeau
-        image.print(
-            loadedFont,
-            20, // Marge gauche
-            imgH - (bannerH / 2) - 8, // Centrage vertical approximatif
-            watermarkText
-        );
+    // 6. Fusionner le tout
+    // On place le bandeau tout en bas
+    image.composite(banner, 0, imgH - bannerH);
+    
+    // On écrit le texte centré verticalement dans le bandeau
+    image.print(
+      loadedFont,
+      20, // Marge gauche
+      imgH - (bannerH / 2) - 8, // Centrage vertical approximatif
+      watermarkText
+    );
 
-        // 7. Retourner l'image traitée en JPEG (qualité 80% pour économiser du stockage)
-        return await image.quality(80).getBufferAsync(Jimp.MIME_JPEG);
+    // 7. Retourner l'image traitée en JPEG (qualité 80% pour économiser du stockage)
+    return await image.quality(80).getBufferAsync(Jimp.MIME_JPEG);
 
-    } catch (error) {
-        console.error("❌ Echec Watermark, renvoi image brute :", error.message);
-        return buffer; // En cas de bug, on ne bloque pas l'agent, on envoie l'image sans texte
-    }
+  } catch (error) {
+    console.error("❌ Echec Watermark, renvoi image brute :", error.message);
+    return buffer; // En cas de bug, on ne bloque pas l'agent, on envoie l'image sans texte
+  }
 }
+
+// ============================================================
+// EXPORTS
+// ============================================================
 
 module.exports = {
   getEndDate,
@@ -213,6 +274,7 @@ module.exports = {
   checkPerm,
   getDistanceInMeters,
   sendEmailAPI,
+  sendEmailWithAttachment, 
   isModuleActive,
   sendPushNotification,
   calculateAutoClose,
