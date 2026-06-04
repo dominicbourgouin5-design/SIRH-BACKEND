@@ -5,6 +5,8 @@ const multer = require("multer");
 const jwt = require("jsonwebtoken");
 const rateLimit = require('express-rate-limit');
 const compression = require('compression');
+const reportingRoutes = require('./routes/reporting');
+
 
 // --- IMPORTS DES MODULES ---
 const backupRoutes = require('./routes/backup');
@@ -125,6 +127,7 @@ app.use("/api", globalLimiter);
 app.use("/api/login", authLimiter);
 app.use("/api/verify-2fa", authLimiter);
 app.use("/api/request-password-reset", authLimiter);
+app.use("/api", reportingRoutes);
 app.use("/api/reset-password", authLimiter);
 app.use("/api/write", writeLimiter);
 app.use("/api/update", writeLimiter);
