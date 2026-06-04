@@ -4,6 +4,7 @@ const pLimit = require('p-limit');
 const limit = pLimit(5);
 const { sendEmailAPI, sendPushNotification } = require('./utils');
 const { runMonitoring } = require('./monitoring');
+const { runFullBackup } = require('./backup');
 
 
 const startCronJobs = () => {
@@ -227,6 +228,18 @@ cron.schedule('0 8 * * *', async () => {
 cron.schedule('*/5 * * * *', async () => {
     console.log("📊 [MONITORING] Vérification périodique...");
     await runMonitoring();
+});
+
+// Tâche de backup quotidien à 2h00 du matin
+cron.schedule('0 2 * * *', async () => {
+    console.log("💾 [BACKUP] Backup automatique quotidien...");
+    await runFullBackup();
+});
+
+// Backup du lundi matin à 3h00 (plus complet)
+cron.schedule('0 3 * * 1', async () => {
+    console.log("📀 [BACKUP] Backup hebdomadaire complet...");
+    await runFullBackup();
 });
 
 module.exports = startCronJobs;
