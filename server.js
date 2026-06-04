@@ -8,6 +8,7 @@ const compression = require('compression');
 
 // --- IMPORTS DES MODULES ---
 const reportingRoutes = require('./routes/reporting');
+const tutorialRoutes = require('./routes/tutorials');
 const backupRoutes = require('./routes/backup');
 const { responseTimeMiddleware, getHealthStatus } = require('./monitoring');
 const crmRoutes = require("./routes/crm");
@@ -123,6 +124,7 @@ app.use(express.urlencoded({ limit: '15mb', extended: true }));
 // ============================================================
 
 app.use("/api", globalLimiter);
+app.use("/api", tutorialRoutes);
 app.use("/api/login", authLimiter);
 app.use("/api/verify-2fa", authLimiter);
 app.use("/api/request-password-reset", authLimiter);
