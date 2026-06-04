@@ -183,7 +183,8 @@ const authenticateToken = (req, res, next) => {
     "/request-password-reset",
     "/reset-password",
     "/health",
-    "/ping"
+    "/ping",
+    "/tutorials" 
   ];
 
   const isPublic = publicPaths.some((path) => req.path.includes(path));
