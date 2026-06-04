@@ -25,21 +25,18 @@ const app = express();
 // ============================================================
 // 🔥 CONFIGURATION TRUST PROXY (POUR RENDER)
 // ============================================================
-// Render utilise un proxy, il faut dire à Express de faire confiance
 app.set('trust proxy', 1);
 
 // ============================================================
-// 🔥 RATE LIMITING - Protection contre les attaques par force brute
+// 🔥 RATE LIMITING - Protection contre les attaques
 // ============================================================
 
-// Configuration de base pour les limiteurs (désactive la validation du proxy)
 const limiterConfig = {
     standardHeaders: true,
     legacyHeaders: false,
-    validate: { trustProxy: false }  // 🔥 ESSENTIEL POUR RENDER
+    validate: { trustProxy: false }
 };
 
-// Limiteur général pour toutes les API (max 100 requêtes par 15 minutes)
 const globalLimiter = rateLimit({
     ...limiterConfig,
     windowMs: 15 * 60 * 1000,
@@ -47,7 +44,6 @@ const globalLimiter = rateLimit({
     message: { error: "Trop de requêtes. Veuillez réessayer plus tard." }
 });
 
-// Limiteur plus strict pour les routes sensibles (login, 2FA)
 const authLimiter = rateLimit({
     ...limiterConfig,
     windowMs: 15 * 60 * 1000,
@@ -56,7 +52,6 @@ const authLimiter = rateLimit({
     message: { error: "Trop de tentatives de connexion. Compte bloqué 15 minutes." }
 });
 
-// Limiteur pour les opérations d'écriture (création, modification)
 const writeLimiter = rateLimit({
     ...limiterConfig,
     windowMs: 60 * 60 * 1000,
@@ -64,7 +59,6 @@ const writeLimiter = rateLimit({
     message: { error: "Trop d'opérations d'écriture. Veuillez ralentir." }
 });
 
-// Limiteur pour les téléchargements de fichiers
 const uploadLimiter = rateLimit({
     ...limiterConfig,
     windowMs: 60 * 60 * 1000,
@@ -72,7 +66,7 @@ const uploadLimiter = rateLimit({
     message: { error: "Trop d'uploads. Veuillez réessayer plus tard." }
 });
 
-// --- CONFIGURATION MULTER (Uploads en mémoire pour plus de rapidité) ---
+// --- CONFIGURATION MULTER ---
 const storage = multer.memoryStorage();
 const upload = multer({
   storage: storage,
@@ -93,7 +87,7 @@ const upload = multer({
   },
 });
 
-// --- CONFIGURATION CORS SÉCURISÉE ---
+// --- CONFIGURATION CORS ---
 const allowedOrigins = [
     'https://sirh.cataria-systems.com',
     'http://sirh.cataria-systems.com', 
@@ -115,9 +109,8 @@ app.use(cors({
     credentials: true
 }));
 
-app.use(responseTimeMiddleware);  // Mesure le temps de réponse
-
-// Middleware JSON et URL encodé
+// Middlewares
+app.use(responseTimeMiddleware);
 app.use(express.json({ limit: '15mb' }));
 app.use(express.urlencoded({ limit: '15mb', extended: true }));
 
@@ -150,6 +143,23 @@ console.log("   - Write: 50 req/heure");
 console.log("   - Upload: 30 req/heure");
 
 // ============================================================
+// ROUTE DE SANTÉ PUBLIQUE (POUR LE MONITORING)
+// ============================================================
+app.get('/api/health', async (req, res) => {
+    try {
+        const status = await getHealthStatus();
+        res.json(status);
+    } catch (error) {
+        res.status(500).json({ status: 'error', message: error.message });
+    }
+});
+
+// Route de ping simple (pour vérifier que le serveur répond)
+app.get('/api/ping', (req, res) => {
+    res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// ============================================================
 // SECURITE JWT
 // ============================================================
 
@@ -167,6 +177,8 @@ const authenticateToken = (req, res, next) => {
     "/ingest-candidate",
     "/request-password-reset",
     "/reset-password",
+    "/health",
+    "/ping"
   ];
 
   const isPublic = publicPaths.some((path) => req.path.includes(path));
@@ -191,7 +203,7 @@ const authenticateToken = (req, res, next) => {
 };
 
 // ============================================================
-// ROUTES
+// ROUTES PRINCIPALES
 // ============================================================
 
 app.use("/api", authenticateToken);
@@ -241,11 +253,6 @@ app.use((err, req, res, next) => {
   });
 });
 
-
-app.get('/api/health', async (req, res) => {
-    const status = await getHealthStatus();
-    res.json(status);
-});
 // ============================================================
 // DEMARRAGE DU SERVEUR ET CRON
 // ============================================================
@@ -262,6 +269,7 @@ app.listen(PORT, () => {
   🔐  JWT Secret : Configuré ✅
   🛡️  Rate Limiting : Activé ✅
   🏢  Trust Proxy : Configuré ✅
+  💚  Health Check : /api/health ✅
   -----------------------------------
   `);
 });
