@@ -6,6 +6,7 @@ const jwt = require("jsonwebtoken");
 const rateLimit = require('express-rate-limit');
 
 // --- IMPORTS DES MODULES ---
+const backupRoutes = require('./routes/backup');
 const { responseTimeMiddleware, getHealthStatus } = require('./monitoring');
 const crmRoutes = require("./routes/crm");
 const compression = require('compression');
@@ -118,6 +119,7 @@ app.use(express.urlencoded({ limit: '15mb', extended: true }));
 // ============================================================
 // 🔥 APPLICATION DES LIMITEURS AUX ROUTES
 // ============================================================
+app.use("/api", backupRoutes);
 app.use(compression()); // Compresse les réponses JSON
 app.use("/api", globalLimiter);
 app.use("/api/login", authLimiter);
