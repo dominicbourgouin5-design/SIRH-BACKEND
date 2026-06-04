@@ -5,6 +5,7 @@ const limit = pLimit(5);
 const { sendEmailAPI, sendPushNotification } = require('./utils');
 const { runMonitoring } = require('./monitoring');
 const { runFullBackup } = require('./backup');
+const notificationService = require('./notificationService');
 
 
 const startCronJobs = () => {
@@ -242,4 +243,21 @@ cron.schedule('0 3 * * 1', async () => {
     await runFullBackup();
 });
 
+// Rappel de pointage à 9h
+cron.schedule('0 9 * * 1-5', async () => {
+    console.log("🔔 [NOTIF] Envoi des rappels de pointage matin...");
+    await notificationService.sendMorningReminder();
+});
+
+// Rappel de pointage à 18h
+cron.schedule('0 18 * * 1-5', async () => {
+    console.log("🔔 [NOTIF] Envoi des rappels de pointage soir...");
+    await notificationService.sendEveningReminder();
+});
+
+// Alerte météo à 6h du matin
+cron.schedule('0 6 * * *', async () => {
+    console.log("🌤️ [NOTIF] Vérification météo...");
+    await notificationService.sendWeatherAlert();
+});
 module.exports = startCronJobs;
