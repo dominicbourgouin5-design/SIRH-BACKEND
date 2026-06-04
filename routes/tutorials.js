@@ -1,4 +1,3 @@
-// routes/tutorials.js
 const express = require('express');
 const router = express.Router();
 const { 
@@ -10,7 +9,7 @@ const {
     shouldShowTutorial
 } = require('../tutorialService');
 
-// Récupérer les tutoriels disponibles
+// GET /api/tutorials
 router.get('/tutorials', async (req, res) => {
     try {
         const role = req.user?.role || 'EMPLOYEE';
@@ -21,7 +20,7 @@ router.get('/tutorials', async (req, res) => {
     }
 });
 
-// Démarrer un tutoriel
+// POST /api/tutorials/start
 router.post('/tutorials/start', async (req, res) => {
     try {
         const { tutorialId } = req.body;
@@ -32,7 +31,7 @@ router.post('/tutorials/start', async (req, res) => {
     }
 });
 
-// Passer à l'étape suivante
+// POST /api/tutorials/next
 router.post('/tutorials/next', async (req, res) => {
     try {
         const { tutorialId, currentStep, completedStep } = req.body;
@@ -43,7 +42,7 @@ router.post('/tutorials/next', async (req, res) => {
     }
 });
 
-// Réinitialiser un tutoriel
+// POST /api/tutorials/reset
 router.post('/tutorials/reset', async (req, res) => {
     try {
         const { tutorialId } = req.body;
@@ -54,7 +53,7 @@ router.post('/tutorials/reset', async (req, res) => {
     }
 });
 
-// Marquer comme terminé
+// POST /api/tutorials/complete
 router.post('/tutorials/complete', async (req, res) => {
     try {
         const { tutorialId } = req.body;
@@ -65,7 +64,7 @@ router.post('/tutorials/complete', async (req, res) => {
     }
 });
 
-// Vérifier si afficher le tutoriel de bienvenue
+// GET /api/tutorials/should-show
 router.get('/tutorials/should-show', async (req, res) => {
     try {
         const show = await shouldShowTutorial(req.user.id, req.user?.role);
