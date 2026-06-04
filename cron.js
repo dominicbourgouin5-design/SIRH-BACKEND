@@ -3,6 +3,8 @@ const supabase = require('./supabaseClient');
 const pLimit = require('p-limit');
 const limit = pLimit(5);
 const { sendEmailAPI, sendPushNotification } = require('./utils');
+const { runMonitoring } = require('./monitoring');
+
 
 const startCronJobs = () => {
     // Le CRON tourne TOUTES LES HEURES (minute 0)
@@ -218,6 +220,13 @@ cron.schedule('0 8 * * *', async () => {
     } catch (err) {
         console.error("❌ [ROBOT CONTRATS] Erreur :", err.message);
     }
+});
+
+
+// Tâche de monitoring toutes les 5 minutes
+cron.schedule('*/5 * * * *', async () => {
+    console.log("📊 [MONITORING] Vérification périodique...");
+    await runMonitoring();
 });
 
 module.exports = startCronJobs;
