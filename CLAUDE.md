@@ -39,10 +39,13 @@ hébergée sur GitHub Pages, domaine `sirh.cataria-systems.com`).
 - **Pas de cloisonnement multi-entreprise.** Aucune table n'a de `company_id`
   exploité (seules `crm_leads`, `crm_stages`, `crm_fields_config` et
   `payroll_rules` en possèdent un, inutilisé). L'application est mono-client.
-- **RLS incomplet.** La clé `anon` est publiée dans le frontend. Voir
-  `sql/01_securite_rls.sql` — l'étape 0 diagnostique les tables exposées.
-- `/get-live-positions` (`routes/mobile.js`) lit toute la table `pointages`
-  sans filtre de date ni limite. À corriger avant toute montée en charge.
+- **RLS presque complet.** La clé `anon` est publiée dans le frontend. Mesure
+  du 20/08/2026 : sur 34 tables, seules `prescripteurs` (3 lignes, dont nom et
+  téléphone) et `company_modules` (7 lignes) répondent à cette clé. Voir
+  `sql/01_securite_rls.sql` pour fermer les deux et généraliser.
+- Toute agrégation sur une période doit passer par `fetchAllRows()` (`utils.js`).
+  PostgREST plafonne chaque réponse à 1000 lignes sans erreur : une requête
+  mensuelle directe renvoie des totaux faux dès qu'on dépasse ce volume.
 - `/update`, `/gatekeeper` et `/contract-gen` lisent leurs paramètres dans
   `req.query` tout en modifiant des données (voir `LEGACY_GET_WRITES`).
 - `app_users.reset_code` sert à la fois au 2FA et à la réinitialisation de mot
@@ -66,6 +69,10 @@ Il n'existe pas encore de tests automatisés.
 
 ## Déploiement
 
-Render se déclenche sur `main`. **Déployer le backend avant le frontend** :
-les deux dépôts évoluent ensemble et le frontend appelle des routes dont les
-méthodes HTTP viennent d'être restreintes.
+Render se déclenche sur `main`.
+
+**Ordre impératif : déployer le frontend AVANT le backend.** Le backend refuse
+désormais `GET /api/login` (405). Si le backend part en premier, le frontend
+encore en ligne enverra son ancien GET et plus personne ne pourra se connecter.
+Dans l'autre sens il n'y a pas de coupure : le nouveau frontend envoie un POST,
+que l'ancien backend accepte déjà.
