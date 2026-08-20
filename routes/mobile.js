@@ -1294,27 +1294,40 @@ router.all("/get-live-positions", async (req, res) => {
     // 1. On ne donne accès qu'aux managers/admin
     if (!checkPerm(req, "can_see_employees")) return res.status(403).json({ error: "Accès refusé" });
 
-    // 2. On récupère le dernier pointage de TOUS les employés actifs
-    // Une astuce SQL (DISTINCT ON) pour avoir juste la dernière position de chaque agent
+    // 2. Fenêtre temporelle : une position vieille de plusieurs jours n'est pas
+    // une position "en direct". Sans cette borne, la requête lisait la table
+    // entière des pointages — coûteux, et surtout tronqué à 1000 lignes par
+    // PostgREST, ce qui faisait disparaître de la carte les agents dont le
+    // dernier pointage sortait de cette fenêtre.
+    const heures = Math.min(parseInt(req.query.heures, 10) || 24, 168);
+    const depuis = new Date(Date.now() - heures * 60 * 60 * 1000).toISOString();
+
     const { data, error } = await supabase
         .from('pointages')
         .select(`
-            id, gps_lat, gps_lon, zone_detectee, action, heure,
+            id, employee_id, gps_lat, gps_lon, zone_detectee, action, heure,
             employees(id, nom, poste, photo_url)
         `)
-        .order('heure', { ascending: false });
+        .gte('heure', depuis)
+        .not('gps_lat', 'is', null)
+        .not('gps_lon', 'is', null)
+        .order('heure', { ascending: false })
+        .limit(2000);
 
     if (error) return res.status(500).json({ error: error.message });
 
-    // 3. Filtrer pour n'avoir que le dernier pointage par employé
+    // 3. Ne garder que le dernier pointage de chaque agent.
+    // employee_id doit impérativement figurer dans le SELECT ci-dessus :
+    // sans lui, la déduplication portait sur undefined et la carte
+    // n'affichait qu'un seul agent, quel que soit le nombre d'agents actifs.
     const uniqueLocations = [];
     const seen = new Set();
-    data.forEach(p => {
-        if (!seen.has(p.employee_id) && p.gps_lat && p.gps_lon) {
+    for (const p of data) {
+        if (p.employee_id && !seen.has(p.employee_id)) {
             uniqueLocations.push(p);
             seen.add(p.employee_id);
         }
-    });
+    }
 
     return res.json(uniqueLocations);
 });
