@@ -4,14 +4,22 @@ const jwt = require("jsonwebtoken");
 const supabase = require("../supabaseClient");
 const { sendEmailAPI } = require("../utils");
 const { isValidEmail, sanitizeString } = require('../validation');
+const {
+  hashPassword,
+  verifyPassword,
+  generateOtpCode,
+  safeCompareCode,
+} = require("../password");
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
 // 1. LOGIN AVEC 2FA CONDITIONNEL
-router.all("/login", async (req, res) => {
+// POST uniquement : en GET, les identifiants finissent dans les logs
+// du proxy, l'historique du navigateur et les en-têtes Referer.
+router.post("/login", async (req, res) => {
   try {
-    const username = (req.body.u || req.query.u || "").toLowerCase().trim();
-    const password = req.body.p || req.query.p || "";
+    const username = (req.body.u || "").toLowerCase().trim();
+    const password = req.body.p || "";
 
     // Validation des entrées
     if (!username || !password) {
@@ -26,10 +34,33 @@ router.all("/login", async (req, res) => {
       .from("app_users")
       .select("id, email, password, nom_complet, employees(id, role, statut, photo_url, employee_type)")
       .eq("email", username)
-      .single();
+      .maybeSingle();
 
-    if (error || !user || user.password !== password) {
+    // On lance toujours la vérification, même si le compte n'existe pas,
+    // pour que le temps de réponse ne trahisse pas les emails valides.
+    const { valid, needsUpgrade } = await verifyPassword(
+      password,
+      user ? user.password : null
+    );
+
+    if (error || !user || !valid) {
       return res.json({ status: "error", message: "Identifiants incorrects" });
+    }
+
+    // Migration transparente : le compte était encore stocké en clair,
+    // on le remplace par un hash bcrypt dès cette connexion réussie.
+    if (needsUpgrade) {
+      try {
+        const upgraded = await hashPassword(password);
+        await supabase
+          .from("app_users")
+          .update({ password: upgraded })
+          .eq("id", user.id);
+        console.log(`🔐 Mot de passe migré vers bcrypt pour le compte #${user.id}`);
+      } catch (upgradeErr) {
+        // Une migration ratée ne doit pas bloquer la connexion.
+        console.error("Migration bcrypt échouée :", upgradeErr.message);
+      }
     }
 
     const emp = user.employees && user.employees.length > 0 ? user.employees[0] : null;
@@ -42,7 +73,7 @@ router.all("/login", async (req, res) => {
 
     // Logique 2FA pour ADMIN & RH
     if (userRole === "ADMIN" || userRole === "RH") {
-      const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+      const otpCode = generateOtpCode();
       const expires = new Date(Date.now() + 10 * 60000).toISOString();
 
       await supabase.from("app_users")
@@ -58,7 +89,7 @@ router.all("/login", async (req, res) => {
           <div style="padding: 30px; text-align: center;">
               <h2 style="margin-top: 0;">Code de vérification</h2>
               <p>Bonjour <b>${sanitizeString(user.nom_complet)}</b>,</p>
-              <p>Vous avez demandé la réinitialisation de votre mot de passe. Voici votre code sécurisé :</p>
+              <p>Une connexion à votre compte vient d'être demandée. Voici votre code de vérification :</p>
               <div style="background: #f1f5f9; padding: 20px; margin: 25px 0; font-size: 32px; font-weight: 900; letter-spacing: 10px; color: #2563eb; border-radius: 12px; border: 2px dashed #cbd5e1;">
                   ${otpCode}
               </div>
@@ -141,26 +172,27 @@ router.post("/verify-2fa", async (req, res) => {
       return res.status(401).json({ status: "error", message: "Aucun code actif. Veuillez vous reconnecter." });
     }
 
+    // Comparaison à temps constant. Les codes ne sont jamais journalisés :
+    // les logs Render sont consultables et un OTP en clair y est exploitable.
     const codeEnBase = String(user.reset_code).trim();
-    console.log(`[2FA-CHECK] Code tapé: "${codeSaisi}"`);
-    console.log(`[2FA-CHECK] Code base: "${codeEnBase}"`);
-    
-    if (codeSaisi !== codeEnBase) {
-      console.error(`[2FA-FAIL] ❌ Codes non identiques.`);
+
+    if (!safeCompareCode(codeSaisi, codeEnBase)) {
+      console.error(`[2FA-FAIL] ❌ Code incorrect pour ${email}.`);
       return res.status(401).json({ status: "error", message: "Le code à 6 chiffres est incorrect." });
     }
 
-    // Vérification temporelle
+    // Vérification temporelle stricte : la date d'expiration est calculée
+    // par le serveur, il n'y a aucune raison de lui accorder une marge.
     const maintenantMS = Date.now();
     const expirationMS = new Date(user.reset_expires).getTime();
-    const margeErreurMS = 5 * 60 * 1000;
 
-    console.log(`[2FA-TIME] Serveur: ${new Date().toISOString()} (${maintenantMS})`);
-    console.log(`[2FA-TIME] Expiration: ${user.reset_expires} (${expirationMS})`);
-    
-    if (maintenantMS > (expirationMS + margeErreurMS)) {
-      const depassementMins = Math.round((maintenantMS - expirationMS) / 60000);
-      console.error(`[2FA-FAIL] ⏰ Code expiré depuis ${depassementMins} minutes.`);
+    if (!Number.isFinite(expirationMS) || maintenantMS > expirationMS) {
+      console.error(`[2FA-FAIL] ⏰ Code expiré pour ${email}.`);
+      // Le code périmé est détruit pour empêcher toute réutilisation.
+      await supabase
+        .from("app_users")
+        .update({ reset_code: null, reset_expires: null })
+        .eq("id", user.id);
       return res.status(401).json({ status: "error", message: "Le temps est écoulé. Ce code a expiré." });
     }
 
@@ -213,7 +245,7 @@ router.post("/verify-2fa", async (req, res) => {
 // ============================================================
 // 3. DEMANDER UN CODE (MOT DE PASSE OUBLIÉ)
 // ============================================================
-router.all("/request-password-reset", async (req, res) => {
+router.post("/request-password-reset", async (req, res) => {
   const email = req.body.email ? req.body.email.toLowerCase().trim() : "";
 
   // Validation
@@ -221,7 +253,7 @@ router.all("/request-password-reset", async (req, res) => {
     return res.status(400).json({ status: "error", message: "Email invalide." });
   }
 
-  const code = Math.floor(100000 + Math.random() * 900000).toString();
+  const code = generateOtpCode();
   const expires = new Date(Date.now() + 15 * 60000).toISOString();
 
   const { data: user, error } = await supabase
@@ -257,7 +289,7 @@ router.all("/request-password-reset", async (req, res) => {
 // ============================================================
 // 4. VALIDER LE CHANGEMENT DE MOT DE PASSE
 // ============================================================
-router.all("/reset-password", async (req, res) => {
+router.post("/reset-password", async (req, res) => {
   const { email, code, newPassword } = req.body;
   const cleanEmail = (email || "").toLowerCase().trim();
 
@@ -289,7 +321,7 @@ router.all("/reset-password", async (req, res) => {
   await supabase
     .from("app_users")
     .update({
-      password: newPassword,
+      password: await hashPassword(newPassword),
       reset_code: null,
       reset_expires: null,
     })

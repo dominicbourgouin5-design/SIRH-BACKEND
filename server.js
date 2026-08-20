@@ -11,6 +11,7 @@ const reportingRoutes = require('./routes/reporting');
 const tutorialRoutes = require('./routes/tutorials');
 const backupRoutes = require('./routes/backup');
 const { responseTimeMiddleware, getHealthStatus } = require('./monitoring');
+const { enforceMethodPolicy } = require('./routePolicy');
 const crmRoutes = require("./routes/crm");
 const authRoutes = require("./routes/auth");
 const employeeRoutes = require("./routes/employees");
@@ -148,6 +149,14 @@ console.log("   - Write: 50 req/heure");
 console.log("   - Upload: 30 req/heure");
 
 // ============================================================
+// POLITIQUE DES MÉTHODES HTTP
+// Empêche qu'une écriture ou une suppression soit déclenchée
+// par un simple GET (voir routePolicy.js).
+// ============================================================
+app.use("/api", enforceMethodPolicy);
+console.log("🚦 Contrôle des méthodes HTTP activé.");
+
+// ============================================================
 // ROUTES PUBLIQUES (SANS AUTHENTIFICATION)
 // ============================================================
 app.get('/api/health', async (req, res) => {
@@ -173,24 +182,29 @@ if (!JWT_SECRET) {
   process.exit(1);
 }
 
+// Comparaison stricte : un `includes` laissait passer sans token toute
+// route dont le chemin contenait l'une de ces chaînes en sous-chaîne
+// (ex. /read-login-history aurait été considérée comme publique).
+const PUBLIC_PATHS = new Set([
+  "/login",
+  "/verify-2fa",
+  "/gatekeeper",
+  "/ingest-candidate",
+  "/request-password-reset",
+  "/reset-password",
+  "/health",
+  "/ping"
+]);
+
 const authenticateToken = (req, res, next) => {
-  const publicPaths = [
-    "/login",
-    "/verify-2fa", 
-    "/gatekeeper",
-    "/ingest-candidate",
-    "/request-password-reset",
-    "/reset-password",
-    "/health",
-    "/ping"
-  ];
+  const cleanPath = req.path.replace(/\/+$/, "") || "/";
+  if (PUBLIC_PATHS.has(cleanPath)) return next();
 
-  const isPublic = publicPaths.some((path) => req.path.includes(path));
-  if (isPublic) return next();
-
+  // Le token transite uniquement par l'en-tête Authorization.
+  // En query string il se retrouverait dans les logs du proxy,
+  // l'historique du navigateur et l'en-tête Referer.
   const authHeader = req.headers["authorization"];
-  let token = authHeader && authHeader.split(" ")[1];
-  if (!token && req.query.token) token = req.query.token;
+  const token = authHeader && authHeader.split(" ")[1];
 
   if (!token) {
     return res.status(401).json({ error: "Token de sécurité manquant" });

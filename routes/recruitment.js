@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const supabase = require("../supabaseClient");
 const { checkPerm, sendEmailAPI, isModuleActive } = require("../utils");
+const { hashPassword, generateTempPassword } = require("../password");
 
 router.all("/candidate-action", async (req, res) => {
   if (!checkPerm(req, "can_see_recruitment")) {
@@ -113,7 +114,7 @@ router.all("/candidate-action", async (req, res) => {
   // =========================================================
   else if (action_type === "ACCEPTER_EMBAUCHE") {
     nouveauStatut = "Embauché";
-    const generatedPassword = Math.random().toString(36).slice(-8) + "!23";
+    const generatedPassword = generateTempPassword();
     const username = candidat.email;
     const siteLink = "https://sirh.cataria-systems.com"; // Ton lien propre
     const empType = req.body.employee_type || "OFFICE";
@@ -124,7 +125,7 @@ router.all("/candidate-action", async (req, res) => {
     const { data: existing } = await supabase.from("app_users").select("id").eq("email", username).single();
 
     if (!existing) {
-      const { data: newUser } = await supabase.from("app_users").insert([{ email: username, password: generatedPassword, nom_complet: candidat.nom_complet }]).select().single();
+      const { data: newUser } = await supabase.from("app_users").insert([{ email: username, password: await hashPassword(generatedPassword), nom_complet: candidat.nom_complet }]).select().single();
 
       if (newUser) {
         const { data: nextMatricule } = await supabase.rpc("get_next_formatted_matricule");

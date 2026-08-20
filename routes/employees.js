@@ -6,6 +6,7 @@ const supabase = require("../supabaseClient");
 const { checkPerm, getEndDate, sendEmailAPI } = require("../utils");
 const { getCache, setCache, clearCache } = require('../memoryCache');
 const { isValidEmail, isValidPhone, isValidDate, isValidAmount, isValidEmployeeType, sanitizeString } = require('../validation');
+const { hashPassword, generateTempPassword } = require("../password");
 
 // ============================================================
 // 1. CRÉATION PROFIL (WRITE)
@@ -79,12 +80,14 @@ router.all("/write", async (req, res) => {
     }
   }
 
-  const generatedPassword = Math.random().toString(36).slice(-8) + "!23";
+  // Mot de passe temporaire cryptographiquement sûr : Math.random()
+  // est prédictible et ne doit jamais servir à générer un secret.
+  const generatedPassword = generateTempPassword();
 
   // Création dans app_users
   const { data: newUser, error: uErr } = await supabase
     .from("app_users")
-    .insert([{ email: body.email, password: generatedPassword, nom_complet: body.nom }])
+    .insert([{ email: body.email, password: await hashPassword(generatedPassword), nom_complet: body.nom }])
     .select()
     .single();
 

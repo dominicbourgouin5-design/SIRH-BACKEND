@@ -104,7 +104,10 @@ async function sendEmailAPI(toEmail, subject, htmlContent) {
     await axios.post(
       "https://api.brevo.com/v3/smtp/email",
       {
-        sender: { name: "SIRH SECURE", email: "nevillebouchard98@gmail.com" },
+        sender: {
+          name: process.env.MAIL_FROM_NAME || "SIRH SECURE",
+          email: process.env.MAIL_FROM_EMAIL || "nevillebouchard98@gmail.com",
+        },
         to: [{ email: toEmail }],
         subject: subject,
         htmlContent: htmlContent,

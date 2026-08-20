@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const supabase = require("../supabaseClient");
 const { checkPerm, sendEmailAPI, calculateAutoClose, sendPushNotification } = require("../utils");
+const jwt = require("jsonwebtoken");
 
 // --- LECTURE DES LOGS ---
 router.all("/read-logs", async (req, res) => {
@@ -382,25 +383,42 @@ router.all("/badge", async (req, res) => {
 
 //--//
 
+// La route reste publique : un badge perdu doit pouvoir être scanné par
+// n'importe quel téléphone. Mais le scan "terminal interne" n'est plus
+// distingué par une clé partagée en dur dans le frontend (donc lisible
+// par tout le monde) : il exige désormais un vrai jeton de session.
+function isTerminalScan(req) {
+  const authHeader = req.headers["authorization"] || "";
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
+  if (!token) return false;
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const perms = decoded.permissions || {};
+    return perms.can_scan_badges === true || perms.can_see_employees === true;
+  } catch (err) {
+    return false;
+  }
+}
+
 router.all("/gatekeeper", async (req, res) => {
-  const { id, key } = req.query;
-  const SCAN_KEY = "SIGD_SECURE_2025";
+  const { id } = req.query;
 
   // 1. Récupérer l'employé
   const { data: emp, error } = await supabase
     .from("employees")
     .select("*")
     .eq("id", id)
-    .single();
+    .maybeSingle();
 
   if (error || !emp) return res.status(404).send("Badge invalide ou inconnu.");
 
   const isSortie = (emp.statut || "").toLowerCase().includes("sortie");
 
   // --------------------------------------------------------
-  // CAS A : SCAN DEPUIS L'APP (TERMINAL SÉCURISÉ)
+  // CAS A : SCAN DEPUIS L'APP (TERMINAL SÉCURISÉ, SESSION VALIDE)
   // --------------------------------------------------------
-  if (key === SCAN_KEY) {
+  if (isTerminalScan(req)) {
     if (isSortie) {
       console.log(`🚫 Accès Refusé (Statut Sortie) : ${emp.nom}`);
       return res.json({
@@ -478,7 +496,7 @@ Ceci est un message pour la protection de vos accès, un message est aussi envoy
 
     try {
       await sendEmailAPI(
-        "nevillebouchard98@gmail.com",
+        process.env.ALERT_EMAIL,
         adminMail.subject,
         adminMail.text,
       );
