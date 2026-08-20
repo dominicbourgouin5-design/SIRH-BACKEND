@@ -15,6 +15,34 @@
 
 
 -- ============================================================================
+--  MESURE RÉELLE EFFECTUÉE LE 20/08/2026 SUR LA PRODUCTION
+-- ----------------------------------------------------------------------------
+--  Sondage des 34 tables via l'API REST avec la clé anon publique (requêtes
+--  HEAD + count, aucune donnée personnelle rapatriée). Résultat :
+--
+--    🔴 prescripteurs    3 lignes lisibles publiquement
+--                        colonnes exposées : nom_complet, fonction, telephone
+--                        => fuite de données à caractère personnel (RGPD)
+--    🟠 company_modules  7 lignes lisibles publiquement
+--                        configuration seule, impact faible
+--    ✅ les 32 autres    0 ligne renvoyée à la clé anon
+--
+--  Les tables employees, app_users, logs, conges et pointages occupent
+--  pourtant 48 à 96 kB sur disque et employees_pkey totalise 108 parcours
+--  d'index : elles contiennent bien des données. Le fait que la clé anon n'en
+--  voie aucune prouve que le RLS y est actif et fonctionne.
+--
+--  Le RLS est donc déjà largement en place. Ce script ferme les deux trous
+--  restants et généralise la protection.
+--
+--  Vérifié également : le backend utilise une clé « sb_secret_ » (équivalent
+--  service_role) qui contourne le RLS, et le frontend n'accède directement à
+--  Supabase que pour le canal temps réel du chat (chat.js:153). Activer le RLS
+--  partout ne casse donc aucun autre appel.
+-- ============================================================================
+
+
+-- ============================================================================
 -- ÉTAPE 0 — DIAGNOSTIC : quelles tables sont actuellement sans protection ?
 -- ============================================================================
 -- Une table avec rowsecurity = false est intégralement lisible et modifiable
