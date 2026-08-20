@@ -13,6 +13,50 @@ const {
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
+// ============================================================
+// CODES À USAGE UNIQUE (2FA / RÉINITIALISATION)
+// ------------------------------------------------------------
+// app_users.reset_code sert aux deux flux. Sans étiquette de finalité,
+// un code de réinitialisation — obtenable sans mot de passe — pouvait
+// être présenté à /verify-2fa et ouvrir une session complète.
+//
+// La colonne reset_purpose est ajoutée par sql/02_separation_codes_otp.sql.
+// Les deux fonctions ci-dessous fonctionnent avant comme après cette
+// migration : tant que la colonne n'existe pas, on retombe sur l'ancien
+// comportement en le signalant dans les logs.
+// ============================================================
+
+const PURPOSE_MFA = "MFA";
+const PURPOSE_RESET = "RESET";
+
+async function enregistrerCode(filtre, code, expires, purpose) {
+  const [colonne, valeur] = Object.entries(filtre)[0];
+
+  const tentative = (payload, retour) =>
+    supabase.from("app_users").update(payload).eq(colonne, valeur).select(retour).maybeSingle();
+
+  const base = { reset_code: code, reset_expires: expires };
+  const { data, error } = await tentative({ ...base, reset_purpose: purpose }, "id, nom_complet");
+
+  if (!error) return data;
+
+  // Colonne absente : migration 02 pas encore appliquée.
+  if (/reset_purpose/.test(error.message || "")) {
+    console.warn("⚠️ Colonne reset_purpose absente — appliquez sql/02_separation_codes_otp.sql");
+    const { data: secours, error: err2 } = await tentative(base, "id, nom_complet");
+    if (err2) throw err2;
+    return secours;
+  }
+
+  throw error;
+}
+
+function finaliteAcceptable(user, attendue) {
+  // undefined = colonne absente, null = code antérieur à la migration.
+  if (user.reset_purpose === undefined) return true;
+  return user.reset_purpose === attendue;
+}
+
 // 1. LOGIN AVEC 2FA CONDITIONNEL
 // POST uniquement : en GET, les identifiants finissent dans les logs
 // du proxy, l'historique du navigateur et les en-têtes Referer.
@@ -76,9 +120,7 @@ router.post("/login", async (req, res) => {
       const otpCode = generateOtpCode();
       const expires = new Date(Date.now() + 10 * 60000).toISOString();
 
-      await supabase.from("app_users")
-        .update({ reset_code: otpCode, reset_expires: expires })
-        .eq("id", user.id);
+      await enregistrerCode({ id: user.id }, otpCode, expires, PURPOSE_MFA);
 
       const emailHtml = `
       <div style="font-family: sans-serif; color: #1e293b; max-width: 500px; margin: auto; border: 1px solid #e2e8f0; border-radius: 16px; overflow: hidden;">
@@ -157,7 +199,7 @@ router.post("/verify-2fa", async (req, res) => {
     // Recherche de l'utilisateur
     const { data: user, error } = await supabase
       .from("app_users")
-      .select("id, email, reset_code, reset_expires, nom_complet, employees(id, role, photo_url, employee_type)")
+      .select("*, employees(id, role, photo_url, employee_type)")
       .eq("email", email)
       .single();
 
@@ -170,6 +212,13 @@ router.post("/verify-2fa", async (req, res) => {
     if (!user.reset_code) {
       console.error(`[2FA-FAIL] ❌ Aucun code actif.`);
       return res.status(401).json({ status: "error", message: "Aucun code actif. Veuillez vous reconnecter." });
+    }
+
+    // Un code de réinitialisation de mot de passe ne doit jamais servir à
+    // ouvrir une session : il s'obtient sans connaître le mot de passe.
+    if (!finaliteAcceptable(user, PURPOSE_MFA)) {
+      console.error(`[2FA-FAIL] ❌ Code de finalité incorrecte pour ${email}.`);
+      return res.status(401).json({ status: "error", message: "Ce code n'est pas un code de connexion." });
     }
 
     // Comparaison à temps constant. Les codes ne sont jamais journalisés :
@@ -256,12 +305,7 @@ router.post("/request-password-reset", async (req, res) => {
   const code = generateOtpCode();
   const expires = new Date(Date.now() + 15 * 60000).toISOString();
 
-  const { data: user, error } = await supabase
-    .from("app_users")
-    .update({ reset_code: code, reset_expires: expires })
-    .eq("email", email)
-    .select("nom_complet")
-    .maybeSingle();
+  const user = await enregistrerCode({ email }, code, expires, PURPOSE_RESET);
 
   if (user) {
     const html = `
@@ -306,9 +350,9 @@ router.post("/reset-password", async (req, res) => {
     return res.status(400).json({ error: "Le mot de passe doit contenir au moins 6 caractères." });
   }
 
-  const { data: user, error } = await supabase
+  const { data: user } = await supabase
     .from("app_users")
-    .select("id")
+    .select("*")
     .eq("email", cleanEmail)
     .eq("reset_code", code)
     .gt("reset_expires", new Date().toISOString())
@@ -316,6 +360,12 @@ router.post("/reset-password", async (req, res) => {
 
   if (!user) {
     return res.status(400).json({ error: "Code invalide ou expiré." });
+  }
+
+  // Symétrique de /verify-2fa : un code de connexion ne doit pas permettre
+  // de changer le mot de passe.
+  if (!finaliteAcceptable(user, PURPOSE_RESET)) {
+    return res.status(400).json({ error: "Ce code n'est pas un code de réinitialisation." });
   }
 
   await supabase
