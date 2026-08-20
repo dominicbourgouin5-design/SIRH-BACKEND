@@ -979,16 +979,33 @@ router.all("/check-closing-time", async (req, res) => {
 
 const webpush = require('web-push');
 
-// Configuration de web-push avec tes clés (il les lit depuis .env)
-webpush.setVapidDetails(
-  'mailto:support@tondomaine.com',
-  process.env.VAPID_PUBLIC_KEY,
-  process.env.VAPID_PRIVATE_KEY
-);
+// Configuration de web-push. setVapidDetails lève une exception si les clés
+// sont absentes ou mal formées : au chargement du module, cela faisait
+// tomber le serveur entier. Les notifications push sont une fonctionnalité
+// annexe, leur absence ne doit pas empêcher l'API de démarrer.
+let pushDisponible = false;
+try {
+  webpush.setVapidDetails(
+    process.env.VAPID_SUBJECT || 'mailto:support@cataria-systems.com',
+    process.env.VAPID_PUBLIC_KEY,
+    process.env.VAPID_PRIVATE_KEY
+  );
+  pushDisponible = true;
+} catch (err) {
+  console.warn(`⚠️ Notifications push désactivées : ${err.message}`);
+}
 
 // --- ENREGISTRER UN TÉLÉPHONE POUR LES PUSH ---
 router.post("/subscribe-push", async (req, res) => {
     const { subscription, user_id } = req.body;
+
+    if (!pushDisponible) {
+        return res.status(503).json({ error: "Notifications push non configurées sur le serveur." });
+    }
+
+    if (!subscription || !subscription.endpoint || !subscription.keys) {
+        return res.status(400).json({ error: "Abonnement push invalide." });
+    }
 
     try {
         // On enregistre l'abonnement dans Supabase
