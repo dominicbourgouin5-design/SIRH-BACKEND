@@ -20,7 +20,7 @@ const READ_ONLY = [
   "/leads", "/stages", "/crm-fields",
   "/get-clock-status", "/get-boss-summary", "/get-dashboard-stats",
   "/get-global-audit", "/get-live-positions", "/get-performance-report",
-  "/live-attendance", "/attendance-status", "/check-returns", "/check-closing-time",
+  "/live-attendance", "/attendance-status", "/check-closing-time",
   "/compute-automated-payroll", "/dashboard-widgets", "/dashboard-prefs",
   "/dashboard-stats", "/export-attendance", "/export-payroll",
   "/tutorials", "/tutorials/should-show", "/badge", "/export-folder",
@@ -56,7 +56,10 @@ const WRITE_ONLY = [
 // pourtant des données. Les migrer en POST demande de toucher aussi le
 // frontend ; elles restent donc tolérées en GET, mais sont listées ici
 // pour rester visibles tant que la migration n'est pas faite.
-const LEGACY_GET_WRITES = ["/update", "/gatekeeper", "/contract-gen"];
+// /check-returns clôture les retours de congé : elle écrit en base tout en
+// étant déclenchée en GET par le frontend. Même catégorie que les trois
+// autres, à migrer en POST des deux côtés à la même occasion.
+const LEGACY_GET_WRITES = ["/update", "/gatekeeper", "/contract-gen", "/check-returns"];
 
 const policy = new Map();
 for (const p of READ_ONLY) policy.set(p, ["GET", "HEAD"]);
@@ -91,4 +94,4 @@ function enforceMethodPolicy(req, res, next) {
   return next();
 }
 
-module.exports = { enforceMethodPolicy, LEGACY_GET_WRITES };
+module.exports = { enforceMethodPolicy, READ_ONLY, WRITE_ONLY, LEGACY_GET_WRITES, policy };

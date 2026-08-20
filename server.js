@@ -64,6 +64,16 @@ const writeLimiter = rateLimit({
     message: { error: "Trop d'opérations d'écriture. Veuillez ralentir." }
 });
 
+// Routes publiques sans authentification : le badge scanné et le formulaire
+// de candidature. Leur identifiant étant énumérable, une limite stricte évite
+// qu'on itère dessus pour aspirer l'annuaire ou inonder les boîtes mail.
+const publicLimiter = rateLimit({
+    ...limiterConfig,
+    windowMs: 60 * 60 * 1000,
+    max: 30,
+    message: { error: "Trop de requêtes. Veuillez réessayer plus tard." }
+});
+
 const uploadLimiter = rateLimit({
     ...limiterConfig,
     windowMs: 60 * 60 * 1000,
@@ -138,6 +148,8 @@ app.use("/api/save-lead", writeLimiter);
 app.use("/api/add-prescripteur", writeLimiter);
 app.use("/api/update-prescripteur", writeLimiter);
 app.use("/api/import-", writeLimiter);
+app.use("/api/gatekeeper", publicLimiter);
+app.use("/api/ingest-candidate", publicLimiter);
 app.use("/api/upload-", uploadLimiter);
 app.use("/api/bulk-upload-docs", uploadLimiter);
 app.use("/api/contract-upload", uploadLimiter);
@@ -147,6 +159,7 @@ console.log("   - Global: 100 req/15min");
 console.log("   - Auth: 10 req/15min");
 console.log("   - Write: 50 req/heure");
 console.log("   - Upload: 30 req/heure");
+console.log("   - Public (badge, candidature): 30 req/heure");
 
 // ============================================================
 // POLITIQUE DES MÉTHODES HTTP

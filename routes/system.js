@@ -499,15 +499,39 @@ Présentez-vous à l'accueil de l'agence Zogbo dès que possible.
 Ceci est un message pour la protection de vos accès, un message est aussi envoyé aux administrateurs.`,
     };
 
-    try {
-      await sendEmailAPI(
-        process.env.ALERT_EMAIL,
-        adminMail.subject,
-        adminMail.text,
-      );
-      await sendEmailAPI(emp.email, employeeMail.subject, employeeMail.text);
-    } catch (e) {
-      console.error("Erreur mails sécurité:", e.message);
+    // Anti-spam : chaque scan public envoie deux emails. La route étant
+    // publique et l'identifiant énumérable, on pourrait inonder toute
+    // l'entreprise en itérant sur les ids. On n'alerte donc qu'une fois par
+    // heure et par badge. La vérification passe par la table logs plutôt que
+    // par le cache mémoire, car Render peut exécuter plusieurs instances.
+    const ilYaUneHeure = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const marqueur = `[badge:${emp.id}]`;
+
+    const { data: alertesRecentes } = await supabase
+      .from("logs")
+      .select("id")
+      .eq("action", "SCAN_EXTERNE")
+      .ilike("details", `%${marqueur}%`)
+      .gte("created_at", ilYaUneHeure)
+      .limit(1);
+
+    const dejaAlerte = Array.isArray(alertesRecentes) && alertesRecentes.length > 0;
+
+    if (!dejaAlerte) {
+      try {
+        await sendEmailAPI(
+          process.env.ALERT_EMAIL,
+          adminMail.subject,
+          adminMail.text,
+        );
+        if (emp.email) {
+          await sendEmailAPI(emp.email, employeeMail.subject, employeeMail.text);
+        }
+      } catch (e) {
+        console.error("Erreur mails sécurité:", e.message);
+      }
+    } else {
+      console.log(`🔁 Scan public répété sur le badge ${emp.id} — alerte déjà envoyée dans l'heure.`);
     }
 
     // Log d'audit
@@ -515,7 +539,7 @@ Ceci est un message pour la protection de vos accès, un message est aussi envoy
       {
         agent: "PORTAIL_PUBLIC",
         action: "SCAN_EXTERNE",
-        details: `Badge ${emp.nom} scanné par un tiers.`,
+        details: `Badge ${emp.nom} ${marqueur} scanné par un tiers.${dejaAlerte ? " (alerte non renvoyée)" : ""}`,
       },
     ]);
 
