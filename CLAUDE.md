@@ -58,6 +58,7 @@ hébergée sur GitHub Pages, domaine `sirh.cataria-systems.com`).
 ```bash
 npm install
 npm start          # démarre sur PORT (4000 par défaut)
+npm test           # suite Node natif, sans base ni réseau
 ```
 
 Variables d'environnement requises : `JWT_SECRET`, `SUPABASE_URL`,
@@ -65,7 +66,11 @@ Variables d'environnement requises : `JWT_SECRET`, `SUPABASE_URL`,
 `VAPID_PRIVATE_KEY`. Optionnelles : `MAIL_FROM_EMAIL`, `MAIL_FROM_NAME`,
 `PORT`, `MONITORING_ENABLED`.
 
-Il n'existe pas encore de tests automatisés.
+Les tests de `tests/` ne touchent ni la base ni le réseau : ils couvrent le
+hachage des mots de passe et la politique des méthodes HTTP. Deux d'entre eux
+sont des garde-fous de classement — ils échouent si une route déclarée en
+lecture se met à écrire, ou si la liste des écritures déclenchées en GET
+s'allonge sans décision explicite. Lancer `npm test` avant tout commit.
 
 ## Déploiement
 
