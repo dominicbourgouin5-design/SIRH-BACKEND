@@ -268,10 +268,54 @@ async function addWatermark(buffer, gps, nomAgent) {
 }
 
 // ============================================================
+// ============================================================
+// PAGINATION COMPLÈTE
+// ============================================================
+
+/**
+ * Récupère TOUTES les lignes d'une requête Supabase, page par page.
+ *
+ * PostgREST plafonne chaque réponse à 1000 lignes, sans erreur ni
+ * avertissement : une agrégation sur un mois entier de pointages était donc
+ * silencieusement tronquée dès que le volume dépassait ce seuil, et les
+ * totaux d'heures s'en trouvaient faux.
+ *
+ * `buildQuery` doit être une fonction qui construit la requête à neuf à
+ * chaque appel : un query builder Supabase ne peut pas être rejoué après
+ * avoir été attendu. La requête doit comporter un `.order()` stable, sans
+ * quoi la pagination peut renvoyer deux fois la même ligne.
+ *
+ *   const lignes = await fetchAllRows(() =>
+ *     supabase.from('pointages').select('*').gte('heure', debut).order('heure')
+ *   );
+ */
+async function fetchAllRows(buildQuery, options = {}) {
+  const pageSize = options.pageSize || 1000;
+  const maxRows = options.maxRows || 50000;
+  const resultats = [];
+
+  for (let debut = 0; debut < maxRows; debut += pageSize) {
+    const { data, error } = await buildQuery().range(debut, debut + pageSize - 1);
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+
+    resultats.push(...data);
+    if (data.length < pageSize) break;
+  }
+
+  if (resultats.length >= maxRows) {
+    console.warn(`⚠️ fetchAllRows a atteint le plafond de ${maxRows} lignes : résultat possiblement incomplet.`);
+  }
+
+  return resultats;
+}
+
+// ============================================================
 // EXPORTS
 // ============================================================
 
 module.exports = {
+  fetchAllRows,
   getEndDate,
   isTargetAuthorized,
   checkPerm,

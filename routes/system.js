@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const supabase = require("../supabaseClient");
-const { checkPerm, sendEmailAPI, calculateAutoClose, sendPushNotification } = require("../utils");
+const { checkPerm, sendEmailAPI, calculateAutoClose, sendPushNotification, fetchAllRows } = require("../utils");
 const jwt = require("jsonwebtoken");
 
 // --- LECTURE DES LOGS ---
@@ -81,13 +81,18 @@ router.all("/read-report", async (req, res) => {
                 const { data: employeesList } = await empQuery;
 
                 // 2. RÉCUPÉRER LES POINTAGES
-                let ptgQuery = supabase.from('pointages').select('*');
-                if (period === 'today') {
-                    ptgQuery = ptgQuery.gte('heure', `${todayStr}T00:00:00`).lte('heure', `${todayStr}T23:59:59`);
-                } else {
-                    ptgQuery = ptgQuery.gte('heure', new Date(now.getFullYear(), now.getMonth(), 1).toISOString());
-                }
-                const { data: pointages } = await ptgQuery.order('heure', { ascending: true });
+                // Pagination complète : sur une période mensuelle, le volume
+                // dépasse les 1000 lignes maximum renvoyées par PostgREST, et
+                // le rapport était tronqué sans le moindre avertissement.
+                const pointages = await fetchAllRows(() => {
+                    let ptgQuery = supabase.from('pointages').select('*');
+                    if (period === 'today') {
+                        ptgQuery = ptgQuery.gte('heure', `${todayStr}T00:00:00`).lte('heure', `${todayStr}T23:59:59`);
+                    } else {
+                        ptgQuery = ptgQuery.gte('heure', new Date(now.getFullYear(), now.getMonth(), 1).toISOString());
+                    }
+                    return ptgQuery.order('heure', { ascending: true });
+                });
 
                 // 3. LOGIQUE JOURNALIÈRE (LIVE)
                 if (period === 'today') {

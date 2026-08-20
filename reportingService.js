@@ -2,7 +2,7 @@
 // Service de reporting avancé
 
 const supabase = require('./supabaseClient');
-const { sendEmailWithAttachment } = require('./utils');
+const { sendEmailWithAttachment, fetchAllRows } = require('./utils');
 const ExcelJS = require('exceljs');
 
 // ============================================================
@@ -11,20 +11,31 @@ const ExcelJS = require('exceljs');
 
 // Générer un rapport Excel des présences
 async function generateAttendanceReport(month, year) {
+    // Borne haute exclusive = premier jour du mois suivant.
+    // L'ancien code comparait à une date sans heure ("2026-08-31"), ce que
+    // Postgres interprète comme 00:00:00 : tous les pointages du dernier jour
+    // du mois étaient exclus du rapport.
     const startDate = `${year}-${String(month).padStart(2, '0')}-01`;
-    const endDate = new Date(year, month, 0).toISOString().split('T')[0];
-    
+    const moisSuivant = month === 12 ? 1 : month + 1;
+    const anneeSuivante = month === 12 ? year + 1 : year;
+    const endDate = `${anneeSuivante}-${String(moisSuivant).padStart(2, '0')}-01`;
+
     // Récupérer les données
     const { data: employees } = await supabase
         .from('employees')
         .select('id, nom, matricule, poste, departement');
-    
-    const { data: pointages } = await supabase
-        .from('pointages')
-        .select('employee_id, heure, action')
-        .gte('heure', startDate)
-        .lte('heure', endDate);
-    
+
+    // Pagination complète : un mois de pointages dépasse vite les 1000 lignes
+    // renvoyées au maximum par PostgREST, ce qui faussait les totaux d'heures.
+    const pointages = await fetchAllRows(() =>
+        supabase
+            .from('pointages')
+            .select('employee_id, heure, action')
+            .gte('heure', startDate)
+            .lt('heure', endDate)
+            .order('heure', { ascending: true })
+    );
+
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet('Présences');
     
@@ -77,12 +88,17 @@ async function generateAttendanceReport(month, year) {
 
 // Générer un rapport Excel des salaires
 async function generatePayrollReport(month, year) {
-    const { data: paie } = await supabase
-        .from('paie')
-        .select('*, employees(nom, matricule, poste)')
-        .eq('mois', month)
-        .eq('annee', year);
-    
+    // Une ligne par employé et par mois : au-delà de 1000 collaborateurs, la
+    // réponse serait tronquée sans pagination et le rapport incomplet.
+    const paie = await fetchAllRows(() =>
+        supabase
+            .from('paie')
+            .select('*, employees(nom, matricule, poste)')
+            .eq('mois', month)
+            .eq('annee', year)
+            .order('id', { ascending: true })
+    );
+
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet('Salaires');
     
