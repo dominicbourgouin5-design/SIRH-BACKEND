@@ -39,10 +39,15 @@ hébergée sur GitHub Pages, domaine `sirh.cataria-systems.com`).
 - **Pas de cloisonnement multi-entreprise.** Aucune table n'a de `company_id`
   exploité (seules `crm_leads`, `crm_stages`, `crm_fields_config` et
   `payroll_rules` en possèdent un, inutilisé). L'application est mono-client.
-- **RLS presque complet.** La clé `anon` est publiée dans le frontend. Mesure
-  du 20/08/2026 : sur 34 tables, seules `prescripteurs` (3 lignes, dont nom et
-  téléphone) et `company_modules` (7 lignes) répondent à cette clé. Voir
-  `sql/01_securite_rls.sql` pour fermer les deux et généraliser.
+- **RLS complet depuis le 21/08/2026.** Les 34 tables sont en RLS actif et la
+  cible est « aucune policy » : le backend passe par la clé de service qui
+  contourne le RLS, donc aucune policy n'est nécessaire. Toute policy ajoutée
+  ouvre un accès direct depuis le navigateur — y réfléchir à deux fois.
+- **Supabase Auth n'est pas utilisé mais son inscription est ouverte.**
+  L'application signe ses propres JWT et gère ses comptes dans `app_users`.
+  Tant que `disable_signup` vaut `false`, n'importe qui peut obtenir un jeton
+  `authenticated` avec la clé anon publique. Ne jamais accorder de droits au
+  rôle `authenticated` dans une policy. Voir `sql/04_policies_authenticated.sql`.
 - Toute agrégation sur une période doit passer par `fetchAllRows()` (`utils.js`).
   PostgREST plafonne chaque réponse à 1000 lignes sans erreur : une requête
   mensuelle directe renvoie des totaux faux dès qu'on dépasse ce volume.
