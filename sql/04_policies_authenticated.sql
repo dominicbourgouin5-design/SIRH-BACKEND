@@ -66,12 +66,38 @@ END $$;
 --  Aucune des deux ne suffit seule : une policy peut être recréée par
 --  inadvertance, et l'inscription peut être réactivée.
 --
---  --- Effet sur l'application : aucun ---
+--  --- Inventaire du 21/08/2026 : trois familles ---
+--
+--  EXPLOITABLES (qual = true, donc accordées sans condition) :
+--
+--    messages           SELECT + INSERT   lire ET écrire dans le chat interne
+--    contract_templates SELECT            modèles de contrats de l'entreprise
+--    mobile_locations   SELECT            sites et lieux d'intervention
+--    zones              SELECT            découpage géographique
+--    products           SELECT            catalogue
+--
+--  La plus grave est messages : un compte créé librement lit l'intégralité
+--  des conversations internes, et peut y publier sous une fausse identité.
+--
+--  SANS EFFET (qual = false) — un malentendu sur le fonctionnement du RLS.
+--  Une policy permissive à false n'interdit rien : elle n'accorde
+--  simplement aucune ligne. Le blocage vient de l'absence de policy.
+--
+--    app_users SELECT · employees UPDATE · paie UPDATE
+--
+--  MORTES (conditions sur auth.uid()) — un compte créé par un inconnu n'a
+--  aucune ligne correspondante dans employees, donc les sous-requêtes
+--  renvoient NULL et les conditions ne sont jamais vraies :
+--
+--    conges SELECT · employees SELECT ×2 · paie SELECT
+--
+--  --- Effet de la suppression sur l'application : aucun ---
 --
 --  Le backend utilise une clé sb_secret_ qui contourne le RLS. Le seul accès
---  direct du navigateur est le canal temps réel du chat sur la table
---  messages — mais il se connecte avec la clé anon, à qui ces policies
---  n'accordaient déjà rien. Mesuré : messages renvoie 0 ligne à la clé anon.
+--  direct du navigateur est le canal temps réel du chat, qui se connecte avec
+--  la clé anon — or ces policies visent authenticated. Mesuré : messages
+--  renvoie 0 ligne à la clé anon. Autrement dit le temps réel du chat ne
+--  fonctionne déjà pas, et le polling déjà présent fait tout le travail.
 -- ============================================================================
 
 
