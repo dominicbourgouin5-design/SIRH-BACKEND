@@ -72,6 +72,19 @@ sont des garde-fous de classement — ils échouent si une route déclarée en
 lecture se met à écrire, ou si la liste des écritures déclenchées en GET
 s'allonge sans décision explicite. Lancer `npm test` avant tout commit.
 
+## Scripts SQL
+
+Les fichiers de `sql/` s'exécutent à la main dans Supabase > SQL Editor, sur le
+projet **SIRH-SECURE-V0** (`wdfuqsqssapcrzhjsels`) — et sur aucun autre. Le
+compte Supabase qui héberge ce projet n'est pas celui qui contient Fahra, NanGo
+et ALLMIGHTY : vérifier le `ref` dans l'URL du dashboard avant de lancer quoi
+que ce soit.
+
+Chaque script commence par un garde-fou qui interrompt tout si les tables du
+SIRH sont absentes. Ne pas le retirer, et le recopier en tête de tout nouveau
+script : l'éditeur Supabase exécute le fichier dans une transaction unique,
+donc l'échec du garde-fou annule l'intégralité du script.
+
 ## Déploiement
 
 Render se déclenche sur `main`.

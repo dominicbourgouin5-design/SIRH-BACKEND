@@ -1,4 +1,31 @@
 -- ============================================================================
+--  GARDE-FOU — À NE PAS SUPPRIMER
+-- ----------------------------------------------------------------------------
+--  Ce script ne doit s'exécuter que sur la base du SIRH.
+--  Lancé par erreur sur un autre projet Supabase, il modifierait des tables
+--  qui ne lui appartiennent pas. Le bloc ci-dessous interrompt tout si les
+--  tables attendues sont absentes.
+--
+--  Projet attendu : SIRH-SECURE-V0  (ref wdfuqsqssapcrzhjsels)
+-- ============================================================================
+
+DO $$
+DECLARE manquantes text;
+BEGIN
+  SELECT string_agg(t, ', ')
+    INTO manquantes
+    FROM unnest(ARRAY['employees', 'app_users', 'pointages', 'conges']) AS t
+   WHERE to_regclass('public.' || t) IS NULL;
+
+  IF manquantes IS NOT NULL THEN
+    RAISE EXCEPTION
+      'Mauvaise base de donnees : les tables % sont introuvables. Ce script est destine au projet SIRH-SECURE-V0 (wdfuqsqssapcrzhjsels). Aucune modification n''a ete appliquee.',
+      manquantes;
+  END IF;
+END $$;
+
+
+-- ============================================================================
 --  SIRH — VERROUILLAGE DE LA BASE (RLS)
 -- ----------------------------------------------------------------------------
 --  Contexte : la clé "anon" Supabase est publiée dans js/core/config.js, donc
