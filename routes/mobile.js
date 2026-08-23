@@ -1,7 +1,8 @@
 const express = require("express");
 const router = express.Router();
 const supabase = require("../supabaseClient");
-const { checkPerm, getDistanceInMeters } = require("../utils");
+const { checkPerm, getDistanceInMeters, findNearestLocation } = require("../utils");
+const { sanitizeString } = require("../validation");
 
 
 router.all("/clock", async (req, res) => {
@@ -49,7 +50,7 @@ router.all("/clock", async (req, res) => {
             return res.status(404).json({ error: "Employé introuvable." });
         }
 
-        const isMobileAgent = (emp.employee_type === 'MOBILE');
+        const isMobileAgent = (emp.contenu_pointage === 'COMPLET');
 
         // 4. VERROU DE SÉCURITÉ : JOURNÉE DÉJÀ CLÔTURÉE
         const { data: finalRecord } = await supabase.from('pointages')
@@ -98,10 +99,13 @@ router.all("/clock", async (req, res) => {
         }
 
         // 6. LOGIQUE GPS (Rayon Intelligent)
+        // Le rayon utilisé est TOUJOURS celui configuré sur le lieu (colonne
+        // rayon/radius) : plus d'écrasement à 1500m pour les sièges ni de
+        // valeur différente selon que la requête vient d'un téléphone ou non.
+        // On retient le lieu le plus proche parmi ceux où l'agent est dans le
+        // rayon, pas le premier trouvé dans l'ordre de la requête.
         let detectedLocName = "Zone Mobile";
         let detectedLocId = null;
-        const userAgent = req.headers['user-agent'] || "";
-        const isMobileDevice = /Mobile|Android|iPhone|iPad/i.test(userAgent);
 
         const [zonesRes, mobilesRes] = await Promise.all([
             supabase.from('zones').select('*').eq('actif', true),
@@ -111,18 +115,11 @@ router.all("/clock", async (req, res) => {
         let allPlaces = [];
         if (zonesRes.data) zonesRes.data.forEach(z => allPlaces.push({ id: z.id, name: z.nom, lat: z.latitude, lon: z.longitude, radius: z.rayon, isOffice: true }));
         if (mobilesRes.data) mobilesRes.data.forEach(m => allPlaces.push({ id: m.id, name: m.name, lat: m.latitude, lon: m.longitude, radius: m.radius, isOffice: false }));
-        
-        for (let loc of allPlaces) {
-            const dist = getDistanceInMeters(userLat, userLon, loc.lat, loc.lon);
-            let effectiveRadius = loc.radius || 100;
-            if (loc.isOffice) effectiveRadius = 1500;
-            else if (isMobileDevice) effectiveRadius = 100;
 
-            if (dist <= effectiveRadius) {
-                detectedLocName = loc.name;
-                detectedLocId = loc.isOffice ? null : loc.id;
-                break;
-            }
+        const nearest = findNearestLocation(userLat, userLon, allPlaces);
+        if (nearest) {
+            detectedLocName = nearest.name;
+            detectedLocId = nearest.isOffice ? null : nearest.id;
         }
 
         if (!isMobileAgent && detectedLocName === "Zone Mobile") {
@@ -318,17 +315,22 @@ router.all("/get-clock-status", async (req, res) => {
   const todayStr = nowBenin.toISOString().split("T")[0]; 
 
   try {
-    // 2. Récupérer l'employé et son type
+    // 2. Récupérer l'employé et ses axes de configuration
     const { data: emp } = await supabase
       .from("employees")
-      .select("employee_type")
+      .select("employee_type, perimetre_lieux, rythme")
       .eq("id", employee_id)
       .single();
-      
+
     if (!emp) return res.status(404).json({ error: "Employé non trouvé" });
 
-    const isGuard = emp.employee_type === "FIXED" || emp.employee_type === "SECURITY";
-    const isOffice = emp.employee_type === "OFFICE";
+    // rythme pilote la durée de shift (identique à l'ancien isGuard sur
+    // FIXED/SECURITY) ; perimetre_lieux pilote le cycle mono/multi-entrée
+    // (identique à l'ancien isOffice — pas rythme, qui vaut STANDARD aussi
+    // bien pour OFFICE que pour MOBILE et ferait perdre aux OFFICE leur
+    // règle "1 sortie = fin de journée").
+    const isGarde = emp.rythme === "GARDE";
+    const isUnLieu = emp.perimetre_lieux === "UN_LIEU";
 
     // 3. VÉRIFICATION : Clôture FINALE AUJOURD'HUI ? (Faite manuellement ou par le CRON)
     const { data: finalToday } = await supabase
@@ -365,25 +367,25 @@ router.all("/get-clock-status", async (req, res) => {
       if (lastRecord.action === "CLOCK_IN") {
         // Définition des limites de shift (doit correspondre au CRON)
         let maxShift = 14;
-        if (isGuard) maxShift = 17;
+        if (isGarde) maxShift = 17;
 
         if (diffHours >= maxShift) {
             // S'il a dépassé la limite absolue, le CRON va le fermer (ou l'a déjà fermé)
             // On débloque le bouton pour qu'il puisse reprendre une nouvelle journée normale.
             status = "OUT";
         } else {
-            // S'il est entré HIER et qu'il n'est pas Gardien de nuit, c'est un oubli.
-            if (!isGuard && lastDateStr !== todayStr) {
+            // S'il est entré HIER et qu'il n'est pas en rythme de garde, c'est un oubli.
+            if (!isGarde && lastDateStr !== todayStr) {
                 status = "OUT";
             } else {
                 status = "IN"; // Il est en poste normal
             }
         }
-      } 
+      }
       else if (lastRecord.action === "CLOCK_OUT") {
-        // Sédentaires (OFFICE) : 1 Sortie = Fin de journée.
-        // Mobiles / Gardiens : Peuvent faire plusieurs Entrées/Sorties.
-        if (isOffice && lastDateStr === todayStr) {
+        // Un seul lieu (ex. bureau) : 1 Sortie = Fin de journée.
+        // Sites assignés / catalogue ouvert : plusieurs Entrées/Sorties possibles.
+        if (isUnLieu && lastDateStr === todayStr) {
           status = "DONE";
           isDayFinished = true;
         } else {
@@ -732,7 +734,7 @@ router.all("/list-zones", async (req, res) => {
 
 // C. Mettre à jour un lieu mobile
 router.all("/update-mobile-location", async (req, res) => {
-  if (!req.user.permissions || !req.user.permissions.can_manage_config) {
+  if (!checkPerm(req, "can_manage_mobile_locations")) {
     return res
       .status(403)
       .json({ error: "Accès refusé à la modification des lieux mobiles" });
@@ -764,13 +766,12 @@ router.all("/update-mobile-location", async (req, res) => {
   return res.json({ status: "success", data: data[0] });
 });
 
-// D. Supprimer un lieu (RÉSERVÉ ADMIN/CONFIG UNIQUEMENT)
+// D. Supprimer un lieu (RÉSERVÉ AUX GESTIONNAIRES DE LIEUX MOBILES)
 router.all("/delete-mobile-location", async (req, res) => {
-  // Seul celui qui a le droit "Configuration" (Admin) peut supprimer
-  if (!req.user.permissions || !req.user.permissions.can_manage_config) {
+  if (!checkPerm(req, "can_manage_mobile_locations")) {
     return res.status(403).json({
       error:
-        "Interdit. Seul l'administrateur peut supprimer un lieu de la base.",
+        "Interdit. Seul un gestionnaire des lieux mobiles peut supprimer un lieu de la base.",
     });
   }
 
@@ -794,6 +795,74 @@ router.all("/import-locations", async (req, res) => {
 
   if (error) throw error;
   return res.json({ status: "success", count: locations.length });
+});
+
+// Un agent terrain propose un lieu non répertorié. Contrairement à
+// /add-mobile-location (réservé aux responsables via can_manage_mobile_locations,
+// toujours actif), ce lieu naît PENDING : utilisable immédiatement pour le
+// pointage GPS, mais signalé comme non validé tant qu'un responsable ne l'a
+// pas confirmé via /validate-mobile-location. On ignore délibérément tout
+// radius/type_location/status envoyé par le client : ce sont des valeurs de
+// confiance, pas des choix laissés à l'appelant.
+router.post("/propose-mobile-location", async (req, res) => {
+  if (!checkPerm(req, "can_clock")) {
+    return res.status(403).json({ error: "Vous n'avez pas l'autorisation de proposer un lieu." });
+  }
+
+  const { name, latitude, longitude } = req.body;
+  if (!name || latitude === undefined || longitude === undefined) {
+    return res.status(400).json({ error: "Nom et coordonnées GPS requis." });
+  }
+
+  const { data, error } = await supabase
+    .from("mobile_locations")
+    .insert([{
+      name: sanitizeString(name),
+      latitude: parseFloat(latitude),
+      longitude: parseFloat(longitude),
+      radius: 50,
+      type_location: "AUTO_GEOLOC",
+      is_active: true,
+      status: "PENDING",
+    }])
+    .select();
+
+  if (error) throw error;
+  return res.json({ status: "success", data: data[0] });
+});
+
+// Un responsable valide ou rejette un lieu provisoire.
+router.post("/validate-mobile-location", async (req, res) => {
+  if (!checkPerm(req, "can_validate_locations")) {
+    return res.status(403).json({ error: "Accès réservé à la validation des lieux." });
+  }
+
+  const { id, decision } = req.body;
+  if (!id || !["APPROVE", "REJECT"].includes(decision)) {
+    return res.status(400).json({ error: "Paramètres invalides." });
+  }
+
+  const updates = decision === "APPROVE"
+    ? { status: "ACTIVE" }
+    : { status: "REJECTED", is_active: false };
+
+  const { data, error } = await supabase.from("mobile_locations").update(updates).eq("id", id).select();
+  if (error) throw error;
+  return res.json({ status: "success", data: data[0] });
+});
+
+// Liste des lieux en attente de validation.
+router.get("/list-pending-locations", async (req, res) => {
+  if (!checkPerm(req, "can_validate_locations")) {
+    return res.status(403).json({ error: "Accès refusé." });
+  }
+  const { data, error } = await supabase
+    .from("mobile_locations")
+    .select("*")
+    .eq("status", "PENDING")
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return res.json(data);
 });
 
 router.all("/get-performance-report", async (req, res) => {
@@ -821,7 +890,7 @@ router.all("/get-performance-report", async (req, res) => {
       };
     }
     stats[empId].total_visites++;
-    const locName = v.mobile_locations.name;
+    const locName = v.mobile_locations?.name || "Lieu inconnu";
     stats[empId].lieux[locName] = (stats[empId].lieux[locName] || 0) + 1;
   });
 
@@ -912,8 +981,8 @@ router.all("/read-visit-reports", async (req, res) => {
       `
                     *,
                     employees:employee_id (nom),
-                    mobile_locations:location_id (name),
-                    prescripteurs:prescripteur_id (nom_complet, fonction) 
+                    mobile_locations:location_id (name, status),
+                    prescripteurs:prescripteur_id (nom_complet, fonction)
                 `,
       { count: "exact" },
     );
@@ -963,6 +1032,7 @@ router.all("/read-visit-reports", async (req, res) => {
         employee_id: v.employee_id,
         nom_agent: v.employees?.nom || "Agent inconnu",
         lieu_nom: v.location_name || v.mobile_locations?.name || "Lieu inconnu",
+        location_pending: v.mobile_locations?.status === 'PENDING',
         contact_nom: doctorName,
         contact_role: doctorRole,
         check_in: v.check_in_time,

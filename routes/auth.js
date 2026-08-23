@@ -76,7 +76,7 @@ router.post("/login", async (req, res) => {
 
     const { data: user, error } = await supabase
       .from("app_users")
-      .select("id, email, password, nom_complet, employees(id, role, statut, photo_url, employee_type)")
+      .select("id, email, password, nom_complet, employees(id, role, statut, photo_url, employee_type, secteur, perimetre_lieux, contenu_pointage, rythme)")
       .eq("email", username)
       .maybeSingle();
 
@@ -164,6 +164,10 @@ router.post("/login", async (req, res) => {
       nom: user.nom_complet,
       role: userRole,
       employee_type: emp ? emp.employee_type : "OFFICE",
+      secteur: emp ? emp.secteur : "GENERAL",
+      perimetre_lieux: emp ? emp.perimetre_lieux : "UN_LIEU",
+      contenu_pointage: emp ? emp.contenu_pointage : "MINIMAL",
+      rythme: emp ? emp.rythme : "STANDARD",
       permissions: perms || {}
     });
 
@@ -199,7 +203,7 @@ router.post("/verify-2fa", async (req, res) => {
     // Recherche de l'utilisateur
     const { data: user, error } = await supabase
       .from("app_users")
-      .select("*, employees(id, role, photo_url, employee_type)")
+      .select("*, employees(id, role, photo_url, employee_type, secteur, perimetre_lieux, contenu_pointage, rythme)")
       .eq("email", email)
       .single();
 
@@ -282,6 +286,10 @@ router.post("/verify-2fa", async (req, res) => {
       nom: user.nom_complet,
       role: userRole,
       employee_type: emp.employee_type || "OFFICE",
+      secteur: emp.secteur || "GENERAL",
+      perimetre_lieux: emp.perimetre_lieux || "UN_LIEU",
+      contenu_pointage: emp.contenu_pointage || "MINIMAL",
+      rythme: emp.rythme || "STANDARD",
       permissions: perms || {}
     });
 

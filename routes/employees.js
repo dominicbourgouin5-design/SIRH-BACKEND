@@ -3,9 +3,9 @@ const archiver = require('archiver');
 const axios = require('axios');
 const router = express.Router();
 const supabase = require("../supabaseClient");
-const { checkPerm, getEndDate, sendEmailAPI } = require("../utils");
+const { checkPerm, getEndDate, sendEmailAPI, deriveAxesFromEmployeeType } = require("../utils");
 const { getCache, setCache, clearCache } = require('../memoryCache');
-const { isValidEmail, isValidPhone, isValidDate, isValidAmount, isValidEmployeeType, sanitizeString } = require('../validation');
+const { isValidEmail, isValidPhone, isValidDate, isValidAmount, isValidEmployeeType, isValidPerimetreLieux, isValidContenuPointage, isValidRythme, sanitizeString } = require('../validation');
 const { hashPassword, generateTempPassword } = require("../password");
 
 // ============================================================
@@ -49,6 +49,16 @@ router.all("/write", async (req, res) => {
   
   if (body.employee_type && !isValidEmployeeType(body.employee_type)) {
     return res.status(400).json({ error: "Type d'employé invalide" });
+  }
+
+  if (body.perimetre_lieux && !isValidPerimetreLieux(body.perimetre_lieux)) {
+    return res.status(400).json({ error: "Périmètre de lieux invalide" });
+  }
+  if (body.contenu_pointage && !isValidContenuPointage(body.contenu_pointage)) {
+    return res.status(400).json({ error: "Contenu de pointage invalide" });
+  }
+  if (body.rythme && !isValidRythme(body.rythme)) {
+    return res.status(400).json({ error: "Rythme invalide" });
   }
 
   console.log("📥 Création profil pour :", sanitizeString(body.nom));
@@ -101,6 +111,7 @@ router.all("/write", async (req, res) => {
   if (seqErr) throw new Error("Erreur de génération de matricule");
   
   const daysLimit = body.limit || "365";
+  const axisDefaults = deriveAxesFromEmployeeType(body.employee_type || "OFFICE");
 
   // Insertion dans employees
   const { data: newEmp, error: empErr } = await supabase
@@ -117,6 +128,10 @@ router.all("/write", async (req, res) => {
         departement: body.dept,
         role: body.role || "EMPLOYEE",
         employee_type: body.employee_type || "OFFICE",
+        secteur: sanitizeString(body.secteur) || axisDefaults.secteur,
+        perimetre_lieux: body.perimetre_lieux || axisDefaults.perimetre_lieux,
+        contenu_pointage: body.contenu_pointage || axisDefaults.contenu_pointage,
+        rythme: body.rythme || axisDefaults.rythme,
         statut: "Actif",
         date_embauche: body.date,
         date_fin_contrat: getEndDate(body.date, daysLimit),
@@ -258,7 +273,7 @@ router.all("/read", async (req, res) => {
       }
     }
 
-    let columns = "id, nom, matricule, poste, departement, statut, role, photo_url, employee_type, date_embauche, type_contrat, solde_conges, hierarchy_path, management_scope, manager_id, date_naissance, email, telephone, adresse, contract_status, contrat_pdf_url, cv_url, id_card_url, diploma_url, attestation_url, lm_url";
+    let columns = "id, nom, matricule, poste, departement, statut, role, photo_url, employee_type, secteur, perimetre_lieux, contenu_pointage, rythme, date_embauche, type_contrat, solde_conges, hierarchy_path, management_scope, manager_id, date_naissance, email, telephone, adresse, contract_status, contrat_pdf_url, cv_url, id_card_url, diploma_url, attestation_url, lm_url";
     
     if (checkPerm(req, "can_see_payroll")) {
       columns += ", salaire_brut_fixe, indemnite_transport, indemnite_logement";
@@ -460,6 +475,27 @@ router.all("/update", async (req, res) => {
       return res.status(400).json({ error: "Type d'employé invalide" });
     }
     updates.employee_type = q.employee_type;
+  }
+  // Axes en delta pur : changer employee_type sur un employé existant ne doit
+  // pas écraser silencieusement des axes déjà personnalisés indépendamment.
+  if (q.secteur) updates.secteur = sanitizeString(q.secteur);
+  if (q.perimetre_lieux) {
+    if (!isValidPerimetreLieux(q.perimetre_lieux)) {
+      return res.status(400).json({ error: "Périmètre de lieux invalide" });
+    }
+    updates.perimetre_lieux = q.perimetre_lieux;
+  }
+  if (q.contenu_pointage) {
+    if (!isValidContenuPointage(q.contenu_pointage)) {
+      return res.status(400).json({ error: "Contenu de pointage invalide" });
+    }
+    updates.contenu_pointage = q.contenu_pointage;
+  }
+  if (q.rythme) {
+    if (!isValidRythme(q.rythme)) {
+      return res.status(400).json({ error: "Rythme invalide" });
+    }
+    updates.rythme = q.rythme;
   }
   if (q.poste) updates.poste = sanitizeString(q.poste);
 

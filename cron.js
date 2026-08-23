@@ -21,7 +21,7 @@ const startCronJobs = () => {
         try {
             const { data: enPoste } = await supabase
                 .from('employees')
-                .select('id, nom, employee_type')
+                .select('id, nom, rythme')
                 .eq('statut', 'En Poste');
 
             if (!enPoste || enPoste.length === 0) {
@@ -80,7 +80,7 @@ const startCronJobs = () => {
                 let logicCloseAddHours = 9;
                 let warnDuration = 12;
 
-                if (emp.employee_type === 'FIXED' || emp.employee_type === 'SECURITY') {
+                if (emp.rythme === 'GARDE') {
                     maxDuration = 17;
                     logicCloseAddHours = 12;
                     warnDuration = 15;

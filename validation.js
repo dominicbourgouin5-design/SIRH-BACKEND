@@ -69,6 +69,18 @@ function isValidEmployeeType(type) {
     return validTypes.includes(type);
 }
 
+// Valide les trois axes de configuration qui pilotent du comportement métier
+// (secteur reste volontairement libre, pas de validateur dédié)
+function isValidPerimetreLieux(v) {
+    return ['UN_LIEU', 'SITES_ASSIGNES', 'CATALOGUE_OUVERT'].includes(v);
+}
+function isValidContenuPointage(v) {
+    return ['MINIMAL', 'COMPLET'].includes(v);
+}
+function isValidRythme(v) {
+    return ['STANDARD', 'GARDE'].includes(v);
+}
+
 // Middleware de validation pour les requêtes
 function validateRequest(schema) {
     return (req, res, next) => {
@@ -113,5 +125,8 @@ module.exports = {
     isValidAmount,
     isValidStatus,
     isValidEmployeeType,
+    isValidPerimetreLieux,
+    isValidContenuPointage,
+    isValidRythme,
     validateRequest
 };

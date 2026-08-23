@@ -95,6 +95,44 @@ function getDistanceInMeters(lat1, lon1, lat2, lon2) {
 }
 
 // ============================================================
+// AXES DE CONFIGURATION EMPLOYÉ
+// ------------------------------------------------------------
+// Sélectionne, parmi des lieux candidats, le plus proche dont la distance
+// reste dans SON PROPRE rayon configuré. Remplace l'ancienne boucle qui
+// écrasait le rayon (1500m forcé pour les bureaux, 100m forcé pour un lieu
+// mobile détecté depuis un téléphone) et s'arrêtait au premier lieu trouvé
+// au lieu du plus proche.
+// ============================================================
+
+function findNearestLocation(userLat, userLon, candidates) {
+  let best = null;
+  let bestDist = Infinity;
+  for (const loc of candidates) {
+    const dist = getDistanceInMeters(userLat, userLon, loc.lat, loc.lon);
+    const effectiveRadius = (loc.radius !== null && loc.radius !== undefined) ? loc.radius : 100;
+    if (dist <= effectiveRadius && dist < bestDist) {
+      bestDist = dist;
+      best = loc;
+    }
+  }
+  return best;
+}
+
+// Dérive les quatre axes (secteur, perimetre_lieux, contenu_pointage, rythme)
+// depuis l'ancien employee_type, pour les points d'insertion qui ne les
+// reçoivent pas explicitement. Doit rester synchronisé avec le backfill de
+// sql/05_axes_configuration_employe.sql.
+function deriveAxesFromEmployeeType(employeeType) {
+  if (employeeType === 'MOBILE') {
+    return { secteur: 'SANTE', perimetre_lieux: 'CATALOGUE_OUVERT', contenu_pointage: 'COMPLET', rythme: 'STANDARD' };
+  }
+  if (employeeType === 'FIXED' || employeeType === 'SECURITY') {
+    return { secteur: 'SECURITE', perimetre_lieux: 'SITES_ASSIGNES', contenu_pointage: 'MINIMAL', rythme: 'GARDE' };
+  }
+  return { secteur: 'GENERAL', perimetre_lieux: 'UN_LIEU', contenu_pointage: 'MINIMAL', rythme: 'STANDARD' };
+}
+
+// ============================================================
 // ENVOI D'EMAILS (BREVO)
 // ============================================================
 
@@ -320,8 +358,10 @@ module.exports = {
   isTargetAuthorized,
   checkPerm,
   getDistanceInMeters,
+  findNearestLocation,
+  deriveAxesFromEmployeeType,
   sendEmailAPI,
-  sendEmailWithAttachment, 
+  sendEmailWithAttachment,
   isModuleActive,
   sendPushNotification,
   calculateAutoClose,

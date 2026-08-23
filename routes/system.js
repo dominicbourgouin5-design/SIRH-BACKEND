@@ -62,7 +62,7 @@ router.all("/read-report", async (req, res) => {
             try {
                 // 1. RÉCUPÉRER TOUS LES EMPLOYÉS ACTIFS (Pour ne pas avoir de trous dans la liste)
                 let empQuery = supabase.from('employees')
-                    .select('id, nom, matricule, departement, hierarchy_path, statut, employee_type')
+                    .select('id, nom, matricule, departement, hierarchy_path, statut, employee_type, rythme')
                     .not('statut', 'ilike', '%sortie%');
 
                 // Filtres de sécurité (Manager/Perso)
@@ -130,7 +130,7 @@ router.all("/read-report", async (req, res) => {
         else {
             const report = employeesList.map(emp => {
                 const sesPointages = (pointages || []).filter(p => p.employee_id === emp.id);
-                const isSecurity = (emp.employee_type === 'FIXED' || emp.employee_type === 'SECURITY');
+                const isSecurity = (emp.rythme === 'GARDE');
                 
                 const days = {};
                 sesPointages.forEach(p => {
@@ -859,8 +859,8 @@ router.all("/get-boss-summary", async (req, res) => {
 
     summary[e.nom].total++;
     summary[e.nom].details.push({
-      lieu: v.mobile_locations.name,
-      zone: v.mobile_locations.zone_name,
+      lieu: v.mobile_locations?.name || v.location_name || "Lieu inconnu",
+      zone: v.mobile_locations?.zone_name || null,
       date: v.check_in_time,
       resultat: v.outcome,
       notes: v.notes,
