@@ -2,6 +2,7 @@ const axios = require("axios");
 const supabase = require("./supabaseClient");
 const webpush = require('web-push');
 const Jimp = require('jimp');
+const { getCache, setCache, clearCache } = require('./memoryCache');
 
 // ============================================================
 // FONCTIONS DE DATE
@@ -130,6 +131,79 @@ function deriveAxesFromEmployeeType(employeeType) {
     return { secteur: 'SECURITE', perimetre_lieux: 'SITES_ASSIGNES', contenu_pointage: 'MINIMAL', rythme: 'GARDE' };
   }
   return { secteur: 'GENERAL', perimetre_lieux: 'UN_LIEU', contenu_pointage: 'MINIMAL', rythme: 'STANDARD' };
+}
+
+// ============================================================
+// DÉROGATIONS DE PERMISSION PERSONNALISÉES
+// ------------------------------------------------------------
+// Ces permissions gardent un rayon d'action trop large pour être
+// personnalisables employé par employé : configuration système,
+// suppression irréversible, accès aux logs de sécurité, gestion des lieux
+// mobiles / plannings de tout le monde. Elles restent exclusivement liées
+// au rôle, vérifiées par checkPerm (synchrone, jamais checkPermAsync).
+// ============================================================
+
+const LOCKED_PERMISSIONS = new Set([
+  "can_manage_config",
+  "can_delete_employees",
+  "can_see_audit",
+  "can_manage_mobile_locations",
+  "can_manage_schedules",
+]);
+
+// Lit les dérogations ACTIVE d'un employé, cache-first (clé
+// `perm_overrides:<id>`). Le résultat "aucune dérogation" est mis en cache
+// sous forme d'objet aux tableaux vides plutôt que `null`, pour que
+// getCache() renvoyant `null` signifie sans ambiguïté "cache manquant",
+// jamais "l'employé n'a aucune dérogation".
+async function getActiveOverridesForEmployee(empId) {
+  const cacheKey = `perm_overrides:${empId}`;
+  const cached = getCache(cacheKey);
+  if (cached) return cached;
+
+  const { data, error } = await supabase
+    .from("permission_overrides")
+    .select("permission_name, mode")
+    .eq("employee_id", empId)
+    .eq("status", "ACTIVE");
+
+  if (error) {
+    console.error("Erreur lecture permission_overrides:", error.message);
+    return { add: [], remove: [] };
+  }
+
+  const result = {
+    add: (data || []).filter((o) => o.mode === "ADD").map((o) => o.permission_name),
+    remove: (data || []).filter((o) => o.mode === "REMOVE").map((o) => o.permission_name),
+  };
+
+  // TTL court (2 min) s'il y a une dérogation réelle à faire respecter au
+  // plus près de son expiration, TTL plus long (10 min) sinon : un octroi
+  // est un acte rare et volontaire, pas besoin de retaper la base à chaque
+  // requête d'un employé qui n'en a jamais eu.
+  const ttl = (result.add.length > 0 || result.remove.length > 0) ? 120 : 600;
+  setCache(cacheKey, result, ttl);
+  return result;
+}
+
+function invalidateOverridesCache(empId) {
+  clearCache(`perm_overrides:${empId}`);
+}
+
+// Variante asynchrone de checkPerm : à utiliser uniquement sur les routes
+// où une dérogation individuelle a un sens (congés, remplacements, fiche
+// employé) — pas systématiquement, les verrous LOCKED_PERMISSIONS n'ont de
+// toute façon jamais de dérogation possible, donc checkPerm() synchrone y
+// suffit.
+async function checkPermAsync(req, permissionName) {
+  const base = checkPerm(req, permissionName);
+  const empId = req.user?.emp_id;
+  if (!empId || LOCKED_PERMISSIONS.has(permissionName)) return base;
+
+  const overrides = await getActiveOverridesForEmployee(empId);
+  if (overrides.remove.includes(permissionName)) return false; // retrait prioritaire
+  if (overrides.add.includes(permissionName)) return true;
+  return base;
 }
 
 // ============================================================
@@ -360,6 +434,10 @@ module.exports = {
   getDistanceInMeters,
   findNearestLocation,
   deriveAxesFromEmployeeType,
+  LOCKED_PERMISSIONS,
+  checkPermAsync,
+  getActiveOverridesForEmployee,
+  invalidateOverridesCache,
   sendEmailAPI,
   sendEmailWithAttachment,
   isModuleActive,

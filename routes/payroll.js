@@ -406,12 +406,20 @@ router.all("/mark-payroll-read", async (req, res) => {
     // On vérifie d'abord si le bulletin n'a pas DÉJÀ été lu
     const { data: existing } = await supabase
       .from("paie")
-      .select("date_consultation")
+      .select("date_consultation, employee_id")
       .eq("id", id)
       .single();
 
+    if (!existing) return res.status(404).json({ error: "Bulletin introuvable" });
+
+    // Preuve juridique de consultation : ne peut être posée que par le
+    // titulaire du bulletin lui-même (ou un gestionnaire de la paie).
+    if (String(existing.employee_id) !== String(req.user.emp_id) && !checkPerm(req, "can_see_payroll")) {
+      return res.status(403).json({ error: "Accès refusé." });
+    }
+
     // S'il n'a jamais été lu, on enregistre la date actuelle
-    if (existing && !existing.date_consultation) {
+    if (!existing.date_consultation) {
       const { error } = await supabase
         .from("paie")
         .update({ date_consultation: new Date().toISOString() })

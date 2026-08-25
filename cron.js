@@ -2,7 +2,7 @@ const cron = require('node-cron');
 const supabase = require('./supabaseClient');
 const pLimit = require('p-limit');
 const limit = pLimit(5);
-const { sendEmailAPI, sendPushNotification } = require('./utils');
+const { sendEmailAPI, sendPushNotification, invalidateOverridesCache } = require('./utils');
 const { runMonitoring } = require('./monitoring');
 const { runFullBackup } = require('./backup');
 const notificationService = require('./notificationService');
@@ -210,6 +210,74 @@ const startCronJobs = () => {
     cron.schedule('*/5 * * * *', async () => {
         console.log("📊 [MONITORING] Vérification périodique...");
         await runMonitoring();
+    });
+
+    // ============================================================
+    // 3bis. EXPIRATION DES DÉROGATIONS DE PERMISSION (toutes les 5 minutes)
+    // ------------------------------------------------------------
+    // Une dérogation temporaire (permission_overrides.expires_at) doit
+    // s'arrêter proche de l'heure prévue, pas seulement à la prochaine
+    // connexion de la personne (contrairement aux permissions de rôle,
+    // embarquées dans le JWT). Ce job fait la coupure : il marque EXPIRED,
+    // invalide le cache local (checkPermAsync le relira depuis la base au
+    // prochain appel), journalise et notifie le titulaire ET celui qui
+    // avait accordé l'accès.
+    // ============================================================
+    cron.schedule('*/5 * * * *', async () => {
+        try {
+            const nowIso = new Date().toISOString();
+            const { data: expired } = await supabase
+                .from('permission_overrides')
+                .select('id, employee_id, permission_name, mode, granted_by, employees:employee_id(nom, email, user_associated_id)')
+                .eq('status', 'ACTIVE')
+                .not('expires_at', 'is', null)
+                .lte('expires_at', nowIso);
+
+            if (!expired || expired.length === 0) return;
+
+            console.log(`🔑 [CRON] ${expired.length} dérogation(s) de permission expirée(s)`);
+
+            for (const ov of expired) {
+                await supabase.from('permission_overrides')
+                    .update({ status: 'EXPIRED', notified_expiry_at: nowIso })
+                    .eq('id', ov.id);
+
+                invalidateOverridesCache(ov.employee_id);
+
+                const emp = ov.employees;
+                await supabase.from('logs').insert([{
+                    agent: "Robot SIRH",
+                    action: "EXPIRATION DEROGATION",
+                    details: `Dérogation ${ov.mode} "${ov.permission_name}" expirée pour ${emp?.nom || ov.employee_id}.`
+                }]);
+
+                if (emp?.user_associated_id) {
+                    await sendPushNotification(emp.user_associated_id,
+                        "🔒 Accès expiré",
+                        `Votre accès temporaire "${ov.permission_name}" a expiré.`, "/#my-profile");
+                }
+                if (emp?.email) {
+                    await sendEmailAPI(emp.email, "Expiration d'un accès temporaire SIRH",
+                        `<p>Votre accès temporaire <strong>${ov.permission_name}</strong> a expiré.</p>`);
+                }
+
+                if (ov.granted_by) {
+                    const { data: granter } = await supabase.from('employees')
+                        .select('user_associated_id, email').eq('id', ov.granted_by).single();
+                    if (granter?.user_associated_id) {
+                        await sendPushNotification(granter.user_associated_id,
+                            "🔒 Accès accordé expiré",
+                            `L'accès "${ov.permission_name}" que vous aviez accordé à ${emp?.nom || 'un employé'} a expiré.`, "/#employees");
+                    }
+                    if (granter?.email) {
+                        await sendEmailAPI(granter.email, "Expiration d'un accès que vous aviez accordé",
+                            `<p>L'accès temporaire <strong>${ov.permission_name}</strong> accordé à <strong>${emp?.nom || ov.employee_id}</strong> a expiré.</p>`);
+                    }
+                }
+            }
+        } catch (err) {
+            console.error("❌ [CRON DÉROGATIONS] Erreur :", err.message);
+        }
     });
 
     // ============================================================

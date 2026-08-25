@@ -88,6 +88,8 @@ router.post("/save-lead", async (req, res) => {
 });
 // 3. AJOUTER UNE INTERACTION (Appel, Email, Notes...)
 router.post("/add-interaction", async (req, res) => {
+    if (!checkPerm(req, "can_manage_crm")) return res.status(403).json({ error: "Accès refusé" });
+
     const { lead_id, type, content, agent_name } = req.body;
 
     // Récupérer l'historique actuel
@@ -206,6 +208,8 @@ router.post("/send-email", async (req, res) => {
 
 // UPLOAD DE FICHIER POUR UN LEAD CRM
 router.post("/upload-lead-file", async (req, res) => {
+    if (!checkPerm(req, "can_manage_crm")) return res.status(403).json({ error: "Accès refusé" });
+
     try {
         const { lead_id, agent_name } = req.body;
         const file = req.files[0]; // Multer récupère le fichier

@@ -404,6 +404,10 @@ router.all("/contract-upload", async (req, res) => {
 });
 
 router.all("/delete-template", async (req, res) => {
+  if (!checkPerm(req, "can_manage_config")) {
+    return res.status(403).json({ error: "Accès refusé à la configuration" });
+  }
+
   const { id } = req.body;
 
   const { error } = await supabase

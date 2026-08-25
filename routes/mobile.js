@@ -276,6 +276,10 @@ router.all("/clock", async (req, res) => {
 router.all('/attendance-status', async (req, res) => {
     const { id } = req.body.id ? req.body : req.query; // Gère si l'ID est envoyé en GET ou POST
 
+    if (String(id) !== String(req.user.emp_id) && !checkPerm(req, "can_see_employees")) {
+        return res.status(403).json({ error: "Accès refusé." });
+    }
+
     try {
         // 1. Chercher le dernier pointage
         const { data: lastPointage } = await supabase
@@ -308,6 +312,10 @@ router.all('/attendance-status', async (req, res) => {
 
 router.all("/get-clock-status", async (req, res) => {
   const { employee_id } = req.query;
+
+  if (String(employee_id) !== String(req.user.emp_id) && !checkPerm(req, "can_see_employees")) {
+    return res.status(403).json({ error: "Accès refusé." });
+  }
 
   // 1. GESTION DU FUSEAU HORAIRE (BÉNIN = UTC+1)
   const nowUTC = new Date();
@@ -866,6 +874,10 @@ router.get("/list-pending-locations", async (req, res) => {
 });
 
 router.all("/get-performance-report", async (req, res) => {
+  if (!checkPerm(req, "can_see_employees")) {
+    return res.status(403).json({ error: "Accès refusé." });
+  }
+
   const { start_date, end_date } = req.query;
 
   // On récupère la synthèse des visites groupées par employé et par lieu
@@ -1186,6 +1198,10 @@ router.all("/get-global-audit", async (req, res) => {
 
 // MASQUER UN BILAN JOURNALIER (ACTION CHEF)
 router.all("/delete-daily-report", async (req, res) => {
+  if (!checkPerm(req, "can_see_employees")) {
+    return res.status(403).json({ error: "Accès refusé." });
+  }
+
   const { id } = req.body;
   const { error } = await supabase
     .from("daily_reports")
@@ -1249,6 +1265,11 @@ router.all("/read-daily-reports", async (req, res) => {
 
 router.all("/submit-daily-report", async (req, res) => {
   const { employee_id, summary, needs_restock } = req.body;
+
+  if (String(employee_id) !== String(req.user.emp_id) && !checkPerm(req, "can_see_employees")) {
+    return res.status(403).json({ error: "Vous ne pouvez soumettre un bilan que pour vous-même." });
+  }
+
   const today = new Date().toISOString().split("T")[0];
   const startDay = `${today}T00:00:00`;
   const endDay = `${today}T23:59:59`;
@@ -1347,6 +1368,10 @@ router.all("/submit-daily-report", async (req, res) => {
 });
 
 router.all("/delete-visit-report", async (req, res) => {
+  if (!checkPerm(req, "can_see_employees")) {
+    return res.status(403).json({ error: "Accès refusé." });
+  }
+
   const { id } = req.body;
   // On ne supprime pas, on cache pour le manager
   const { error } = await supabase

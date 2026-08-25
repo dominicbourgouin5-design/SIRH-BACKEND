@@ -65,9 +65,14 @@ router.all("/read-report", async (req, res) => {
                     .select('id, nom, matricule, departement, hierarchy_path, statut, employee_type, rythme')
                     .not('statut', 'ilike', '%sortie%');
 
-                // Filtres de sécurité (Manager/Perso)
-                if (isPersonalMode) empQuery = empQuery.eq('id', req.user.emp_id);
-                else if (isGlobalMode && !checkPerm(req, 'can_see_employees')) {
+                // Filtres de sécurité (Manager/Perso). Tout mode absent ou
+                // inattendu (ni GLOBAL ni PERSONAL) retombe sur le filtrage
+                // par soi-même : avant, ce cas ne passait dans AUCUNE des
+                // branches et renvoyait la liste complète des employés sans
+                // filtre, quelle que soit la permission de l'appelant.
+                if (isGlobalMode && checkPerm(req, 'can_see_employees')) {
+                    // Accès global confirmé : aucun filtre.
+                } else if (isGlobalMode) {
                     const { data: requester } = await supabase.from('employees').select('hierarchy_path, management_scope').eq('id', req.user.emp_id).single();
                     if (requester) {
                         let securityCond = [`hierarchy_path.eq.${requester.hierarchy_path}`, `hierarchy_path.ilike.${requester.hierarchy_path}/%`];
@@ -77,6 +82,8 @@ router.all("/read-report", async (req, res) => {
                         }
                         empQuery = empQuery.or(securityCond.join(','));
                     }
+                } else {
+                    empQuery = empQuery.eq('id', req.user.emp_id);
                 }
                 const { data: employeesList } = await empQuery;
 
@@ -832,6 +839,10 @@ router.all("/read-modules", async (req, res) => {
 });
 
 router.all("/get-boss-summary", async (req, res) => {
+  if (!checkPerm(req, "can_see_employees")) {
+    return res.status(403).json({ error: "Accès refusé." });
+  }
+
   const { month, year } = req.query;
   const startDate = `${year}-${month}-01`;
 
@@ -1026,7 +1037,10 @@ try {
 
 // --- ENREGISTRER UN TÉLÉPHONE POUR LES PUSH ---
 router.post("/subscribe-push", async (req, res) => {
-    const { subscription, user_id } = req.body;
+    const { subscription } = req.body;
+    // L'abonnement est toujours rattaché à l'appelant authentifié : un
+    // user_id fourni par le client n'est jamais fiable.
+    const user_id = req.user.id;
 
     if (!pushDisponible) {
         return res.status(503).json({ error: "Notifications push non configurées sur le serveur." });
