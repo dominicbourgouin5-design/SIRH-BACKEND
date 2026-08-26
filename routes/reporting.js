@@ -12,26 +12,19 @@ const {
 } = require('../reportingService');
 const { checkPerm } = require('../utils');
 
-// Helper pour vérifier le rôle
-function isAdminOrRH(user) {
-    const role = user?.role || user?.user?.role;
-    return role === 'ADMIN' || role === 'RH';
-}
-
-// Helper pour vérifier si c'est ADMIN
-function isAdmin(user) {
-    const role = user?.role || user?.user?.role;
-    return role === 'ADMIN';
-}
+// Ces trois routes étaient gardées par un test de rôle en dur
+// (`role === 'ADMIN' || role === 'RH'`), ce qui les plaçait hors du système
+// de permissions : un COMPTABLE ne pouvait pas exporter la paie, et aucune
+// dérogation individuelle ne pouvait le lui accorder, puisque les
+// dérogations agissent sur req.user.permissions et non sur req.user.role.
+// Elles passent donc par des permissions nommées, comme le reste de l'API.
 
 // Générer rapport des présences (Excel)
 router.get('/export-attendance', async (req, res) => {
-    console.log("🔍 Rôle utilisateur:", req.user?.role);
-    
-    if (!isAdminOrRH(req.user)) {
-        return res.status(403).json({ error: "Accès refusé. Réservé aux administrateurs." });
+    if (!checkPerm(req, "can_export_attendance")) {
+        return res.status(403).json({ error: "Accès refusé à l'export des présences." });
     }
-    
+
     try {
         const { month, year } = req.query;
         const workbook = await generateAttendanceReport(parseInt(month), parseInt(year));
@@ -49,12 +42,10 @@ router.get('/export-attendance', async (req, res) => {
 
 // Générer rapport des salaires (Excel)
 router.get('/export-payroll', async (req, res) => {
-    console.log("🔍 Rôle utilisateur:", req.user?.role);
-    
-    if (!isAdminOrRH(req.user)) {
-        return res.status(403).json({ error: "Accès refusé. Réservé aux administrateurs." });
+    if (!checkPerm(req, "can_export_payroll")) {
+        return res.status(403).json({ error: "Accès refusé à l'export de la paie." });
     }
-    
+
     try {
         const { month, year } = req.query;
         const workbook = await generatePayrollReport(month, parseInt(year));
@@ -72,12 +63,10 @@ router.get('/export-payroll', async (req, res) => {
 
 // Envoyer rapport mensuel
 router.post('/send-monthly-report', async (req, res) => {
-    console.log("🔍 Rôle utilisateur:", req.user?.role);
-    
-    if (!isAdmin(req.user)) {
-        return res.status(403).json({ error: "Accès refusé. Réservé aux administrateurs." });
+    if (!checkPerm(req, "can_send_reports")) {
+        return res.status(403).json({ error: "Accès refusé à l'envoi des rapports." });
     }
-    
+
     try {
         await sendMonthlyReport();
         res.json({ status: "success", message: "Rapport mensuel envoyé" });
