@@ -2,27 +2,19 @@ const express = require("express");
 const router = express.Router();
 const supabase = require("../supabaseClient");
 const {
-  checkPermAsync,
+  checkPerm,
   LOCKED_PERMISSIONS,
   isTargetAuthorized,
   invalidateOverridesCache,
-  getActiveOverridesForEmployee,
 } = require("../utils");
 
-// Fusionne les permissions de rôle (embarquées dans le JWT à la connexion)
-// avec les dérogations actives de l'appelant. Permet au frontend de
-// détecter un octroi/une expiration sans attendre une reconnexion — voir
-// le rafraîchissement périodique côté client (js/modules/ui.js).
+// Permissions réellement en vigueur pour l'appelant. Le middleware
+// applyPermissionOverrides a déjà fusionné ses dérogations dans
+// req.user.permissions, il n'y a donc plus qu'à les renvoyer telles quelles.
+// Permet au frontend de détecter un octroi ou une expiration sans attendre
+// une reconnexion — voir le sondage périodique dans js/modules/ui.js.
 router.get("/read-effective-permissions", async (req, res) => {
-  const base = req.user.permissions || {};
-  const empId = req.user.emp_id;
-  if (!empId) return res.json(base);
-
-  const overrides = await getActiveOverridesForEmployee(empId);
-  const effective = { ...base };
-  overrides.remove.forEach((k) => { effective[k] = false; });
-  overrides.add.forEach((k) => { effective[k] = true; });
-  return res.json(effective);
+  return res.json(req.user.permissions || {});
 });
 
 // ============================================================
@@ -85,13 +77,16 @@ async function canGrantTo(req, targetEmployeeId, permissionName) {
 // Anti-escalade : on ne peut accorder (ADD) que ce qu'on possède déjà
 // soi-même. Ne s'applique pas au retrait (REMOVE) — retirer un droit à
 // quelqu'un ne peut pas être une escalade de privilège. ADMIN passe outre.
-async function canSelfGrant(req, permissionName, mode) {
+function canSelfGrant(req, permissionName, mode) {
   if (mode !== "ADD" || req.user.role === "ADMIN") return true;
-  return await checkPermAsync(req, permissionName);
+  // req.user.permissions inclut déjà les dérogations du granteur : quelqu'un
+  // qui tient un droit d'une dérogation peut donc le déléguer, ce qui est
+  // cohérent avec le fait qu'il l'exerce réellement.
+  return checkPerm(req, permissionName);
 }
 
 router.post("/grant-permission-override", async (req, res) => {
-  if (!(await checkPermAsync(req, "can_manage_employee_access"))) {
+  if (!checkPerm(req, "can_manage_employee_access")) {
     return res.status(403).json({ error: "Accès refusé à la gestion des accès." });
   }
 
@@ -103,7 +98,7 @@ router.post("/grant-permission-override", async (req, res) => {
   const grantCheck = await canGrantTo(req, employee_id, permission_name);
   if (!grantCheck.ok) return res.status(403).json({ error: grantCheck.reason });
 
-  if (!(await canSelfGrant(req, permission_name, mode))) {
+  if (!canSelfGrant(req, permission_name, mode)) {
     return res.status(403).json({ error: "Vous ne pouvez pas accorder une permission que vous ne possédez pas vous-même." });
   }
 
@@ -144,7 +139,7 @@ router.post("/grant-permission-override", async (req, res) => {
 });
 
 router.post("/extend-permission-override", async (req, res) => {
-  if (!(await checkPermAsync(req, "can_manage_employee_access"))) {
+  if (!checkPerm(req, "can_manage_employee_access")) {
     return res.status(403).json({ error: "Accès refusé à la gestion des accès." });
   }
 
@@ -183,7 +178,7 @@ router.post("/extend-permission-override", async (req, res) => {
 });
 
 router.post("/convert-permission-override", async (req, res) => {
-  if (!(await checkPermAsync(req, "can_manage_employee_access"))) {
+  if (!checkPerm(req, "can_manage_employee_access")) {
     return res.status(403).json({ error: "Accès refusé à la gestion des accès." });
   }
 
@@ -219,7 +214,7 @@ router.post("/convert-permission-override", async (req, res) => {
 });
 
 router.post("/revoke-permission-override", async (req, res) => {
-  if (!(await checkPermAsync(req, "can_manage_employee_access"))) {
+  if (!checkPerm(req, "can_manage_employee_access")) {
     return res.status(403).json({ error: "Accès refusé à la gestion des accès." });
   }
 
@@ -259,7 +254,7 @@ router.post("/revoke-permission-override", async (req, res) => {
 // section "Accès personnalisés" — la base à partir de laquelle un ADD/REMOVE
 // se distingue visuellement.
 router.get("/read-role-permissions", async (req, res) => {
-  if (!(await checkPermAsync(req, "can_manage_employee_access"))) {
+  if (!checkPerm(req, "can_manage_employee_access")) {
     return res.status(403).json({ error: "Accès refusé." });
   }
 
@@ -298,7 +293,7 @@ router.get("/read-permission-overrides", async (req, res) => {
   // périmètre que pour accorder (RH sauf ADMIN, MANAGER sur son équipe).
   const isSelf = String(employee_id) === String(req.user.emp_id);
   if (!isSelf) {
-    if (!(await checkPermAsync(req, "can_manage_employee_access"))) {
+    if (!checkPerm(req, "can_manage_employee_access")) {
       return res.status(403).json({ error: "Accès refusé." });
     }
     const { data: target } = await supabase.from("employees").select("role").eq("id", employee_id).maybeSingle();

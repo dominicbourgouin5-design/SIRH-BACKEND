@@ -219,7 +219,7 @@ const startCronJobs = () => {
     // s'arrêter proche de l'heure prévue, pas seulement à la prochaine
     // connexion de la personne (contrairement aux permissions de rôle,
     // embarquées dans le JWT). Ce job fait la coupure : il marque EXPIRED,
-    // invalide le cache local (checkPermAsync le relira depuis la base au
+    // invalide le cache local (le middleware le relira depuis la base au
     // prochain appel), journalise et notifie le titulaire ET celui qui
     // avait accordé l'accès.
     // ============================================================

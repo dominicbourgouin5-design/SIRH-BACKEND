@@ -140,7 +140,7 @@ function deriveAxesFromEmployeeType(employeeType) {
 // personnalisables employé par employé : configuration système,
 // suppression irréversible, accès aux logs de sécurité, gestion des lieux
 // mobiles / plannings de tout le monde. Elles restent exclusivement liées
-// au rôle, vérifiées par checkPerm (synchrone, jamais checkPermAsync).
+// au rôle — le middleware de fusion les ignore, quoi qu'il y ait en base.
 // ============================================================
 
 const LOCKED_PERMISSIONS = new Set([
@@ -190,20 +190,50 @@ function invalidateOverridesCache(empId) {
   clearCache(`perm_overrides:${empId}`);
 }
 
-// Variante asynchrone de checkPerm : à utiliser uniquement sur les routes
-// où une dérogation individuelle a un sens (congés, remplacements, fiche
-// employé) — pas systématiquement, les verrous LOCKED_PERMISSIONS n'ont de
-// toute façon jamais de dérogation possible, donc checkPerm() synchrone y
-// suffit.
-async function checkPermAsync(req, permissionName) {
-  const base = checkPerm(req, permissionName);
-  const empId = req.user?.emp_id;
-  if (!empId || LOCKED_PERMISSIONS.has(permissionName)) return base;
+// Applique les dérogations sur les permissions de rôle. Fonction pure :
+// testable sans base ni réseau, et c'est elle qui porte les deux règles
+// métier — un retrait l'emporte sur un ajout, et une permission verrouillée
+// n'est jamais modifiable quoi qu'il y ait en base.
+function mergeOverridesIntoPermissions(basePermissions, overrides) {
+  const merged = { ...(basePermissions || {}) };
+  if (!overrides) return merged;
 
-  const overrides = await getActiveOverridesForEmployee(empId);
-  if (overrides.remove.includes(permissionName)) return false; // retrait prioritaire
-  if (overrides.add.includes(permissionName)) return true;
-  return base;
+  (overrides.add || []).forEach((key) => {
+    if (!LOCKED_PERMISSIONS.has(key)) merged[key] = true;
+  });
+  // Après les ajouts : un retrait est prioritaire sur un ajout portant sur
+  // la même permission.
+  (overrides.remove || []).forEach((key) => {
+    if (!LOCKED_PERMISSIONS.has(key)) merged[key] = false;
+  });
+
+  return merged;
+}
+
+// Middleware monté juste après authenticateToken : fusionne les dérogations
+// de l'appelant dans req.user.permissions, une fois pour toutes.
+//
+// C'est ce qui rend le mécanisme cohérent : les ~60 `checkPerm(req, ...)` et
+// les accès directs `req.user.permissions.can_xxx` déjà présents dans le
+// code respectent les dérogations sans être modifiés, et tout endpoint
+// écrit plus tard en bénéficie sans que son auteur ait à y penser.
+//
+// Coût : une lecture du cache mémoire par requête, et une requête base
+// seulement au cache-miss (TTL 10 min pour la grande majorité des employés,
+// qui n'ont aucune dérogation).
+async function applyPermissionOverrides(req, res, next) {
+  try {
+    const empId = req.user?.emp_id;
+    if (!empId) return next(); // route publique, ou compte sans fiche employé
+
+    const overrides = await getActiveOverridesForEmployee(empId);
+    req.user.permissions = mergeOverridesIntoPermissions(req.user.permissions, overrides);
+  } catch (err) {
+    // Une panne de lecture des dérogations ne doit pas bloquer l'API : on
+    // retombe sur les seules permissions du rôle (JWT), jamais plus larges.
+    console.error("Erreur application des dérogations:", err.message);
+  }
+  return next();
 }
 
 // ============================================================
@@ -435,7 +465,8 @@ module.exports = {
   findNearestLocation,
   deriveAxesFromEmployeeType,
   LOCKED_PERMISSIONS,
-  checkPermAsync,
+  mergeOverridesIntoPermissions,
+  applyPermissionOverrides,
   getActiveOverridesForEmployee,
   invalidateOverridesCache,
   sendEmailAPI,

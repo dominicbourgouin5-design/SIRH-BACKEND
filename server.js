@@ -12,6 +12,7 @@ const tutorialRoutes = require('./routes/tutorials');
 const backupRoutes = require('./routes/backup');
 const { responseTimeMiddleware, getHealthStatus } = require('./monitoring');
 const { enforceMethodPolicy } = require('./routePolicy');
+const { applyPermissionOverrides } = require('./utils');
 const crmRoutes = require("./routes/crm");
 const authRoutes = require("./routes/auth");
 const employeeRoutes = require("./routes/employees");
@@ -239,6 +240,9 @@ const authenticateToken = (req, res, next) => {
 // ============================================================
 
 app.use("/api", authenticateToken);
+// Fusionne les dérogations individuelles dans req.user.permissions dès la
+// sortie du JWT : à partir d'ici, tout `checkPerm` du code en tient compte.
+app.use("/api", applyPermissionOverrides);
 app.use("/api", upload.any());
 
 // Routes API

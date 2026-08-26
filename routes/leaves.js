@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const supabase = require("../supabaseClient");
-const { checkPerm, checkPermAsync, sendEmailAPI, sendPushNotification } = require("../utils");
+const { checkPerm, sendEmailAPI, sendPushNotification } = require("../utils");
 
 // ============================================================
 // 6. MODULE DES CONGÉS
@@ -29,7 +29,7 @@ router.all("/leave", async (req, res) => {
 
   // Une demande ne peut être créée que pour soi-même, sauf pour un manager
   // qui la crée au nom d'un employé (can_see_employees).
-  if (String(empId) !== String(req.user.emp_id) && !(await checkPermAsync(req, "can_see_employees"))) {
+  if (String(empId) !== String(req.user.emp_id) && !checkPerm(req, "can_see_employees")) {
     return res.status(403).json({ error: "Vous ne pouvez créer une demande que pour vous-même." });
   }
 
@@ -93,7 +93,7 @@ router.all("/read-leaves", async (req, res) => {
     .select("*, employees(solde_conges)")
     .order("created_at", { ascending: false });
 
-  if (await checkPermAsync(req, "can_see_employees")) {
+  if (checkPerm(req, "can_see_employees")) {
     // RH (ou dérogation active) voit tout
   } else {
     query = query.eq("employee_id", req.user.emp_id);
@@ -127,7 +127,7 @@ router.all("/read-leaves", async (req, res) => {
 // C. ACTION SUR UN CONGÉ (VALIDATION AVEC PUSH + EMAIL)
 // ============================================================
 router.all("/leave-action", async (req, res) => {
-  if (!(await checkPermAsync(req, "can_see_employees"))) {
+  if (!checkPerm(req, "can_see_employees")) {
     return res.status(403).json({ error: "Accès refusé à la gestion des congés" });
   }
 
