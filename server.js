@@ -25,6 +25,7 @@ const catalogRoutes = require("./routes/catalog");
 const chatRoutes = require("./routes/chat");
 const systemRoutes = require("./routes/system");
 const permissionsRoutes = require("./routes/permissions");
+const paymentTemplatesRoutes = require("./routes/paymentTemplates");
 const startCronJobs = require("./cron");
 
 const app = express();
@@ -257,6 +258,7 @@ app.use("/api", catalogRoutes);
 app.use("/api", chatRoutes);
 app.use("/api", systemRoutes);
 app.use("/api", permissionsRoutes);
+app.use("/api", paymentTemplatesRoutes);
 app.use("/api", crmRoutes);
 app.use("/api", backupRoutes);
 app.use("/api", reportingRoutes);
