@@ -29,17 +29,29 @@ function sanitizeString(str) {
         .trim();
 }
 
-// Valide un numéro de téléphone Bénin (avec ou sans espaces)
+// Valide un numéro de téléphone Bénin (avec ou sans espaces ni séparateurs).
+//
+// Depuis le 30/11/2024, le plan de numérotation béninois est passé à
+// 10 chiffres avec le préfixe 01 : « 97 12 34 56 » s'écrit désormais
+// « 01 97 12 34 56 ». L'ancienne expression n'acceptait que 8 chiffres et
+// rejetait donc tous les numéros actuels, ce qui bloquait la saisie des
+// coordonnées Mobile Money.
+//
+// Les deux formats sont acceptés : le nouveau pour les saisies courantes,
+// l'ancien pour ne pas invalider les fiches créées avant la réforme.
 function isValidPhone(phone) {
     if (!phone) return true; // Optionnel
-    
-    // Supprimer tous les espaces
-    const cleaned = String(phone).replace(/\s/g, '');
-    
-    // Accepter les formats: +229XXXXXXXX, 00229XXXXXXXX, 0XXXXXXXX
-    const phoneRegex = /^(\+229|00229|0)[0-9]{8}$/;
-    
-    return phoneRegex.test(cleaned);
+
+    let cleaned = String(phone).replace(/[\s.\-()]/g, '');
+    if (cleaned.startsWith('+229')) cleaned = cleaned.slice(4);
+    else if (cleaned.startsWith('00229')) cleaned = cleaned.slice(5);
+    else if (cleaned.startsWith('229')) cleaned = cleaned.slice(3);
+
+    // Format actuel : 10 chiffres commençant par 01
+    if (/^01[0-9]{8}$/.test(cleaned)) return true;
+
+    // Format historique : 8 chiffres, éventuellement précédés d'un 0
+    return /^0?[0-9]{8}$/.test(cleaned);
 }
 
 // Valide une date (format YYYY-MM-DD)

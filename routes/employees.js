@@ -6,6 +6,95 @@ const supabase = require("../supabaseClient");
 const { checkPerm, getEndDate, sendEmailAPI, deriveAxesFromEmployeeType } = require("../utils");
 const { getCache, setCache, clearCache } = require('../memoryCache');
 const { isValidEmail, isValidPhone, isValidDate, isValidAmount, isValidEmployeeType, isValidPerimetreLieux, isValidContenuPointage, isValidRythme, sanitizeString } = require('../validation');
+const {
+  normaliserNumeroBenin,
+  normaliserIban,
+  estIbanBjValide,
+} = require("../settlementFormat");
+
+// ============================================================
+// COORDONNÉES DE PAIEMENT
+// ------------------------------------------------------------
+// Le frontend valide déjà à la saisie, mais il n'est pas une garantie : un
+// appel direct à l'API contournerait tout. On revalide donc ici, et on
+// normalise avant écriture pour que la base ne contienne qu'une seule forme
+// de chaque valeur (numéro en 01XXXXXXXX, IBAN sans espaces).
+//
+// Renvoie { champs, erreurs }. `champs` ne contient que ce qui a été fourni,
+// pour rester compatible avec une mise à jour partielle.
+//
+// ⚠️ Ne jamais journaliser le contenu de `champs` : il porte des IBAN.
+// ============================================================
+const CHAMPS_PAIEMENT = [
+  "mode_paiement_defaut", "iban", "banque_nom", "banque_code",
+  "banque_guichet", "bic", "momo_numero", "momo_operateur", "titulaire_compte",
+];
+
+function extraireCoordonneesPaiement(source, options = {}) {
+  const champs = {};
+  const erreurs = [];
+  const present = (cle) => source[cle] !== undefined;
+
+  if (present("mode_paiement_defaut")) {
+    const mode = source.mode_paiement_defaut;
+    if (!["VIREMENT", "MOBILE_MONEY", "ESPECES", "CHEQUE"].includes(mode)) {
+      erreurs.push("Mode de paiement invalide.");
+    } else {
+      champs.mode_paiement_defaut = mode;
+    }
+  }
+
+  if (present("iban")) {
+    const brut = String(source.iban || "").trim();
+    if (!brut) {
+      champs.iban = null;
+    } else {
+      const compact = normaliserIban(brut);
+      const verif = estIbanBjValide(compact);
+      // Un mod-97 douteux passe en avertissement côté saisie : on ne bloque
+      // que les erreurs franches (longueur, pays, caractères).
+      if (!verif.valide) erreurs.push(verif.raison);
+      else champs.iban = compact;
+    }
+  }
+
+  if (present("momo_numero")) {
+    const brut = String(source.momo_numero || "").trim();
+    if (!brut) {
+      champs.momo_numero = null;
+    } else {
+      const normalise = normaliserNumeroBenin(brut);
+      if (!normalise) {
+        erreurs.push("Numéro Mobile Money invalide : 10 chiffres commençant par 01.");
+      } else {
+        champs.momo_numero = normalise;
+      }
+    }
+  }
+
+  if (present("momo_operateur")) {
+    const op = String(source.momo_operateur || "").trim();
+    if (!op) champs.momo_operateur = null;
+    else if (!["MTN", "MOOV", "CELTIIS"].includes(op)) erreurs.push("Opérateur Mobile Money invalide.");
+    else champs.momo_operateur = op;
+  }
+
+  for (const cle of ["banque_nom", "banque_code", "banque_guichet", "bic", "titulaire_compte"]) {
+    if (present(cle)) {
+      const v = String(source[cle] || "").trim();
+      champs[cle] = v ? sanitizeString(v) : null;
+    }
+  }
+
+  // Un paiement mobile money sans opérateur est inexploitable : le fichier
+  // partirait chez le mauvais opérateur, ou nulle part.
+  const modeCible = champs.mode_paiement_defaut || options.modeExistant;
+  if (modeCible === "MOBILE_MONEY" && champs.momo_numero && champs.momo_operateur === null) {
+    erreurs.push("Précisez l'opérateur du numéro Mobile Money.");
+  }
+
+  return { champs, erreurs };
+}
 const { hashPassword, generateTempPassword } = require("../password");
 
 // ============================================================
@@ -113,6 +202,12 @@ router.all("/write", async (req, res) => {
   const daysLimit = body.limit || "365";
   const axisDefaults = deriveAxesFromEmployeeType(body.employee_type || "OFFICE");
 
+  const verifPaiement = extraireCoordonneesPaiement(body);
+  if (verifPaiement.erreurs.length > 0) {
+    return res.status(400).json({ error: verifPaiement.erreurs.join(" ") });
+  }
+  const coordonneesPaiement = verifPaiement.champs;
+
   // Insertion dans employees
   const { data: newEmp, error: empErr } = await supabase
     .from("employees")
@@ -132,6 +227,7 @@ router.all("/write", async (req, res) => {
         perimetre_lieux: body.perimetre_lieux || axisDefaults.perimetre_lieux,
         contenu_pointage: body.contenu_pointage || axisDefaults.contenu_pointage,
         rythme: body.rythme || axisDefaults.rythme,
+        ...coordonneesPaiement,
         statut: "Actif",
         date_embauche: body.date,
         date_fin_contrat: getEndDate(body.date, daysLimit),
@@ -277,6 +373,12 @@ router.all("/read", async (req, res) => {
     
     if (checkPerm(req, "can_see_payroll")) {
       columns += ", salaire_brut_fixe, indemnite_transport, indemnite_logement";
+    }
+
+    // Les coordonnées bancaires ne sortent que pour qui a le droit de les
+    // voir : sans ça, la liste des employés exposerait tous les IBAN.
+    if (checkPerm(req, "can_see_payment_details")) {
+      columns += ", mode_paiement_defaut, iban, banque_nom, banque_code, banque_guichet, bic, momo_numero, momo_operateur, titulaire_compte, coord_paiement_maj_at";
     }
 
     let query = supabase.from("employees").select(columns, { count: "exact" });
@@ -497,6 +599,50 @@ router.all("/update", async (req, res) => {
     }
     updates.rythme = q.rythme;
   }
+
+  // Coordonnées de paiement. Deux garde-fous :
+  //   - il faut le droit de les voir pour les modifier ;
+  //   - elles sont GELÉES tant qu'un lot de règlement est ouvert pour ce
+  //     salarié, pour qu'on ne puisse pas détourner un virement en changeant
+  //     le numéro la veille du paiement.
+  const champsPaiementFournis = CHAMPS_PAIEMENT.some((c) => q[c] !== undefined);
+  if (champsPaiementFournis) {
+    if (!checkPerm(req, "can_see_payment_details")) {
+      return res.status(403).json({ error: "Accès refusé aux coordonnées de paiement." });
+    }
+
+    const { data: ligneVivante } = await supabase
+      .from("reglement_lignes")
+      .select("id, reference")
+      .eq("employee_id", id)
+      .in("statut", ["A_PAYER", "EXPORTE"])
+      .limit(1)
+      .maybeSingle();
+
+    if (ligneVivante) {
+      return res.status(409).json({
+        error: "Coordonnées gelées : un règlement est en cours pour ce salarié. Clôturez-le avant de les modifier.",
+      });
+    }
+
+    const { data: existant } = await supabase
+      .from("employees")
+      .select("mode_paiement_defaut")
+      .eq("id", id)
+      .maybeSingle();
+
+    const verifPaiement = extraireCoordonneesPaiement(q, {
+      modeExistant: existant?.mode_paiement_defaut,
+    });
+    if (verifPaiement.erreurs.length > 0) {
+      return res.status(400).json({ error: verifPaiement.erreurs.join(" ") });
+    }
+
+    Object.assign(updates, verifPaiement.champs);
+    updates.coord_paiement_maj_at = new Date().toISOString();
+    updates.coord_paiement_maj_par = req.user.emp_id;
+  }
+
   if (q.poste) updates.poste = sanitizeString(q.poste);
 
   if (q.manager_id !== undefined) {
