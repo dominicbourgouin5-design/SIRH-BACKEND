@@ -42,6 +42,7 @@ const WRITE_ONLY = [
   "/grant-permission-override", "/extend-permission-override",
   "/convert-permission-override", "/revoke-permission-override",
   "/save-payment-template", "/delete-payment-template", "/preview-payment-template",
+  "/export-payment-coordinates-template", "/import-payment-coordinates",
   "/add-zone", "/delete-zone", "/import-zones", "/import-locations",
   "/save-product", "/delete-product",
   "/add-prescripteur", "/update-prescripteur", "/delete-prescripteur",

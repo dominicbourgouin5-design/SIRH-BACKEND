@@ -880,4 +880,188 @@ router.get("/export-folder/:id", async (req, res) => {
   }
 });
 
+// ============================================================
+// 8. SCHÉMA COORDONNÉES PRÉ-REMPLI + IMPORT DE MASSE (E3)
+// ============================================================
+
+// Exporte un CSV pré-rempli de tous les employés actifs, avec leur mode
+// de paiement et leurs coordonnées actuelles. Les colonnes bancaires et
+// MoMo sont toutes présentes ; une cellule vide signifie « non renseigné
+// pour ce salarié », pas « effacer ». Permet au comptable de voir en un
+// coup d'œil qui est en MoMo et qui est en virement, de compléter les
+// cases manquantes, puis de réimporter.
+router.post("/export-payment-coordinates-template", async (req, res) => {
+  if (!checkPerm(req, "can_see_payment_details")) {
+    return res.status(403).json({ error: "Accès refusé aux coordonnées de paiement." });
+  }
+  try {
+    const { data: employes, error } = await supabase
+      .from("employees")
+      .select("id, matricule, nom, mode_paiement_defaut, banque_nom, banque_code, banque_guichet, iban, bic, momo_numero, momo_operateur, titulaire_compte")
+      .in("statut", ["Actif", "En Poste"])
+      .order("matricule", { ascending: true });
+
+    if (error) throw error;
+
+    const SEP = ";";
+    const ENTETES = [
+      "id_employe", "matricule", "nom", "mode_paiement",
+      "banque_nom", "banque_code", "banque_guichet", "iban", "bic",
+      "momo_numero", "momo_operateur", "titulaire_compte",
+    ];
+
+    const cel = (v) => {
+      if (v == null) return "";
+      const s = String(v);
+      if (s.includes(SEP) || s.includes('"') || s.includes("\n")) {
+        return '"' + s.replace(/"/g, '""') + '"';
+      }
+      return s;
+    };
+
+    const lignes = [ENTETES.join(SEP)];
+    for (const e of employes) {
+      lignes.push([
+        cel(e.id),
+        cel(e.matricule),
+        cel(e.nom),
+        cel(e.mode_paiement_defaut || "ESPECES"),
+        cel(e.banque_nom),
+        cel(e.banque_code),
+        cel(e.banque_guichet),
+        cel(e.iban),
+        cel(e.bic),
+        cel(e.momo_numero),
+        cel(e.momo_operateur),
+        cel(e.titulaire_compte),
+      ].join(SEP));
+    }
+
+    // BOM UTF-8 pour qu'Excel ouvre le fichier sans problème d'encodage
+    const csv = "﻿" + lignes.join("\r\n");
+    const date = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename=coordonnees_paiement_${date}.csv`);
+    res.send(Buffer.from(csv, "utf-8"));
+  } catch (err) {
+    console.error("Erreur export coordonnées paiement:", err);
+    res.status(500).json({ error: "Erreur lors de la génération du fichier." });
+  }
+});
+
+// Import de masse des coordonnées de paiement.
+// Le frontend parse le CSV via PapaParse et envoie { lignes: [...] }.
+// On rapproche sur id_employe, on valide côté serveur (même logique que
+// la saisie manuelle), et on refuse les lignes dont les coordonnées sont
+// gelées par un lot de règlement ouvert.
+// Une cellule vide dans le fichier retourné = « ne pas toucher » : on ne
+// peut pas effacer un IBAN en laissant la colonne vide.
+router.post("/import-payment-coordinates", async (req, res) => {
+  if (!checkPerm(req, "can_see_payment_details")) {
+    return res.status(403).json({ error: "Accès refusé aux coordonnées de paiement." });
+  }
+
+  const { lignes } = req.body;
+  if (!Array.isArray(lignes) || lignes.length === 0) {
+    return res.status(400).json({ error: "Aucune ligne à traiter." });
+  }
+
+  const mis_a_jour = [];
+  const ignores = [];
+  const erreurs = [];
+
+  for (let i = 0; i < lignes.length; i++) {
+    const row = lignes[i];
+    const numLigne = i + 2; // ligne 1 = en-têtes
+
+    const id = String(row.id_employe || "").trim();
+    if (!id) {
+      ignores.push({ ligne: numLigne, motif: "id_employe absent" });
+      continue;
+    }
+
+    // Construire la source en excluant les champs vides : une cellule vide
+    // signifie « ne pas modifier », pas « mettre à null ».
+    const source = {};
+    const MAPPING = {
+      mode_paiement_defaut: "mode_paiement",
+      banque_nom:           "banque_nom",
+      banque_code:          "banque_code",
+      banque_guichet:       "banque_guichet",
+      iban:                 "iban",
+      bic:                  "bic",
+      momo_numero:          "momo_numero",
+      momo_operateur:       "momo_operateur",
+      titulaire_compte:     "titulaire_compte",
+    };
+    for (const [cle, col] of Object.entries(MAPPING)) {
+      const val = row[col];
+      if (val !== undefined && String(val).trim() !== "") {
+        source[cle] = String(val).trim();
+      }
+    }
+
+    const { champs, erreurs: errs } = extraireCoordonneesPaiement(source);
+    if (errs.length > 0) {
+      erreurs.push({ ligne: numLigne, motif: errs.join(" ; ") });
+      continue;
+    }
+
+    if (Object.keys(champs).length === 0) {
+      ignores.push({ ligne: numLigne, motif: "aucun champ à mettre à jour" });
+      continue;
+    }
+
+    const { data: emp, error: empErr } = await supabase
+      .from("employees")
+      .select("id, matricule, nom")
+      .eq("id", id)
+      .maybeSingle();
+
+    if (empErr || !emp) {
+      erreurs.push({ ligne: numLigne, motif: `Employé introuvable (id: ${id})` });
+      continue;
+    }
+
+    // Refuser si un lot de règlement est en cours pour cet employé
+    const { data: ligneVivante } = await supabase
+      .from("reglement_lignes")
+      .select("reference")
+      .eq("employee_id", id)
+      .in("statut", ["A_PAYER", "EXPORTE"])
+      .limit(1)
+      .maybeSingle();
+
+    if (ligneVivante) {
+      erreurs.push({ ligne: numLigne, motif: `${emp.nom} — coordonnées gelées (règlement ${ligneVivante.reference} en cours)` });
+      continue;
+    }
+
+    champs.coord_paiement_maj_at  = new Date().toISOString();
+    champs.coord_paiement_maj_par = req.user.emp_id || null;
+
+    const { error: updErr } = await supabase
+      .from("employees")
+      .update(champs)
+      .eq("id", id);
+
+    if (updErr) {
+      console.error("Import coordonnées — erreur mise à jour:", updErr.message);
+      erreurs.push({ ligne: numLigne, motif: "Erreur base de données" });
+      continue;
+    }
+
+    mis_a_jour.push({ id, matricule: emp.matricule, nom: emp.nom });
+  }
+
+  await clearCache("read_*");
+
+  res.json({
+    mis_a_jour,
+    ignores,
+    erreurs,
+    resume: `${mis_a_jour.length} mis à jour, ${ignores.length} ignorés, ${erreurs.length} erreur(s).`,
+  });
+});
+
 module.exports = router;
